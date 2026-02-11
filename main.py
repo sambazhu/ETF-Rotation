@@ -7,7 +7,11 @@ Usage:
     # 真实数据回测（AKShare + 缓存）
     python main.py
 
-    # Tushare Pro数据源回测（推荐）
+    # Tushare Pro 数据源（推荐）
+    # 方式1：在 .env 文件中配置 TUSHARE_TOKEN（推荐）
+    python main.py --source tushare
+
+    # 方式2：命令行传参
     python main.py --source tushare --tushare-token YOUR_TOKEN
 
     # 自定义日期范围

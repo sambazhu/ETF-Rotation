@@ -9,3 +9,4 @@ matplotlib>=3.4.0
 
 # 工具
 python-dateutil>=2.8.0
+python-dotenv>=1.0.0

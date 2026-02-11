@@ -307,7 +307,13 @@ def fetch_index_daily_akshare(
 # Tushare Pro 数据源
 # ──────────────────────────────────────────────
 
-TUSHARE_TOKEN: str = ""
+import os
+from dotenv import load_dotenv
+
+# 加载环境变量
+load_dotenv()
+
+TUSHARE_TOKEN: str = os.getenv("TUSHARE_TOKEN", "")
 
 
 def _to_ts_code(code: str) -> str:

@@ -32,3 +32,6 @@ data/cache/
 # Gemini agent artifacts
 .gemini/
 .agent/
+
+# Local Config
+.env

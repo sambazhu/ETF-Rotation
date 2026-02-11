@@ -69,7 +69,12 @@ python main.py --mock
 # 4. 运行真实数据回测 (AKShare, 免费)
 python main.py --start 2023-01-01 --end 2025-12-31
 
-# 5. 使用Tushare Pro数据源（推荐，需token）
+# 5. 使用 Tushare Pro 数据源（推荐）
+# 方式一：使用本地配置（推荐）
+# 在项目根目录创建 .env 文件，写入：TUSHARE_TOKEN=your_token
+python main.py --source tushare --start 2023-01-01 --end 2025-12-31
+
+# 方式二：命令行参数
 python main.py --source tushare --tushare-token YOUR_TOKEN --start 2023-01-01 --end 2025-12-31
 
 # 6. 自定义资金
