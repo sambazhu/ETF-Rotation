@@ -117,10 +117,19 @@ class RiskControl:
         # 冷静期倒计时
         if self.cooldown_remaining > 0:
             self.cooldown_remaining -= 1
-            signals.append(StopSignal(
-                code="PORTFOLIO", action="cooldown",
-                reason=f"冷静期剩余{self.cooldown_remaining}天", severity=1
-            ))
+            if self.cooldown_remaining == 0:
+                # 冷却结束 → 重置基准，允许重新入场
+                self.portfolio_peak_value = total_value
+                self.freeze_new_buy = False
+                signals.append(StopSignal(
+                    code="PORTFOLIO", action="cooldown_end",
+                    reason="冷静期结束，重置基准，允许重新入场", severity=1
+                ))
+            else:
+                signals.append(StopSignal(
+                    code="PORTFOLIO", action="cooldown",
+                    reason=f"冷静期剩余{self.cooldown_remaining}天", severity=1
+                ))
             return signals
 
         # 层级1: 个股止损
@@ -181,6 +190,7 @@ class RiskControl:
                 severity=3
             ))
             self.cooldown_remaining = self.cooldown_days
+            self.freeze_new_buy = True
 
         elif drawdown > self.portfolio_reduce:
             signals.append(StopSignal(
@@ -188,14 +198,17 @@ class RiskControl:
                 reason=f"组合回撤{drawdown:.1%} > {self.portfolio_reduce:.0%}, 降至30%仓位",
                 severity=2
             ))
+            # 减仓后也进入冷却期(较短)，冷却结束后重置基准
+            self.cooldown_remaining = max(self.cooldown_days - 2, 3)
+            self.freeze_new_buy = True
 
         elif drawdown > self.portfolio_warning:
             signals.append(StopSignal(
                 code="PORTFOLIO", action="portfolio_warning",
-                reason=f"组合回撤{drawdown:.1%} > {self.portfolio_warning:.0%}, 冻结新买入",
+                reason=f"组合回撤{drawdown:.1%} > {self.portfolio_warning:.0%}, 预警",
                 severity=1
             ))
-            self.freeze_new_buy = True
+            # 预警阶段只记录，不冻结买入
         else:
             self.freeze_new_buy = False
 

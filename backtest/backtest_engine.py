@@ -35,16 +35,27 @@ class BacktestEngine:
     def __init__(self, config: Optional[Dict] = None,
                  signal_config: Optional[Dict] = None,
                  risk_config: Optional[Dict] = None,
-                 use_mock: bool = False):
+                 use_mock: bool = False,
+                 data_source: Optional[str] = None,
+                 tushare_token: Optional[str] = None):
         self.config = config or BACKTEST_CONFIG
         self.signal_config = signal_config or SIGNAL_CONFIG
         self.risk_config = risk_config or RISK_CONFIG
         self.use_mock = use_mock
 
+        # 确定数据源
+        if use_mock:
+            source = "mock"
+        elif data_source:
+            source = data_source
+        else:
+            source = "akshare"
+
         # 核心组件
         self.data_fetcher = DataFetcher(
-            data_source="mock" if use_mock else "akshare",
+            data_source=source,
             fallback_to_mock=True,
+            tushare_token=tushare_token,
         )
         self.processor = DataProcessor()
         self.signal_gen = SignalGenerator(signal_config, risk_config)

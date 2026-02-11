@@ -1,7 +1,8 @@
-"""AKShare数据源封装及Mock数据生成。
+"""AKShare / Tushare 数据源封装及Mock数据生成。
 
-所有AKShare API调用集中在此模块，上层通过DataFetcher间接使用。
-数据源策略: AKShare为唯一数据源，IOPV用基金收盘净值替代。
+所有API调用集中在此模块，上层通过DataFetcher间接使用。
+支持数据源: AKShare(免费) / Tushare Pro(推荐,需token) / Mock
+IOPV用基金收盘净值替代。
 """
 
 from __future__ import annotations
@@ -298,6 +299,171 @@ def fetch_index_daily_akshare(
     result["code"] = code
 
     result.sort_values("date", inplace=True)
+    result.reset_index(drop=True, inplace=True)
+    return result
+
+
+# ──────────────────────────────────────────────
+# Tushare Pro 数据源
+# ──────────────────────────────────────────────
+
+TUSHARE_TOKEN: str = ""
+
+
+def _to_ts_code(code: str) -> str:
+    """将6位ETF代码转换为Tushare ts_code格式。
+
+    规则: 51xxxx/58xxxx → .SH (上交所), 15xxxx/16xxxx/56xxxx → .SZ (深交所)
+    """
+    code = str(code).zfill(6)
+    if code.startswith(("51", "58", "56")):
+        # 56开头可能是深交所也可能是上交所, 但562500等是SH
+        if code.startswith("56"):
+            return f"{code}.SH"
+        return f"{code}.SH"
+    return f"{code}.SZ"
+
+
+def _to_index_ts_code(code: str) -> str:
+    """将指数代码转换为Tushare ts_code格式。
+
+    规则: 000xxx → .SH (上证), 399xxx → .SZ (深证)
+    """
+    code = str(code).zfill(6)
+    if code.startswith("399"):
+        return f"{code}.SZ"
+    return f"{code}.SH"
+
+
+def set_tushare_token(token: str):
+    """设置Tushare Pro API Token。"""
+    global TUSHARE_TOKEN
+    TUSHARE_TOKEN = token
+
+
+def probe_tushare() -> DataSourceStatus:
+    """探测 Tushare Pro 可用性。"""
+    try:
+        import tushare as ts
+        if not TUSHARE_TOKEN:
+            return DataSourceStatus("tushare", False, "Tushare token未设置")
+        pro = ts.pro_api(TUSHARE_TOKEN)
+        # 简单探测: 获取1天交易日历
+        df = pro.trade_cal(exchange='SSE', start_date='20250101', end_date='20250102')
+        if df is not None and not df.empty:
+            return DataSourceStatus("tushare", True, f"Tushare Pro 可用 (v{ts.__version__})")
+        return DataSourceStatus("tushare", False, "Tushare Pro 返回空数据")
+    except Exception as exc:
+        return DataSourceStatus("tushare", False, f"Tushare Pro 不可用: {exc}")
+
+
+def fetch_etf_daily_tushare(code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """通过 Tushare fund_daily 获取ETF日线行情。
+
+    Returns:
+        DataFrame with columns: date, code, open, high, low, close, volume, amount
+    """
+    import tushare as ts
+
+    pro = ts.pro_api(TUSHARE_TOKEN)
+    ts_code = _to_ts_code(code)
+    sd = start_date.replace("-", "")
+    ed = end_date.replace("-", "")
+
+    try:
+        df = pro.fund_daily(
+            ts_code=ts_code,
+            start_date=sd,
+            end_date=ed,
+            fields='ts_code,trade_date,open,high,low,close,vol,amount'
+        )
+    except Exception as exc:
+        logger.warning(f"Tushare fund_daily 失败 ({ts_code}): {exc}")
+        return pd.DataFrame()
+
+    if df is None or df.empty:
+        logger.warning(f"Tushare ETF日线数据为空: {ts_code}")
+        return pd.DataFrame()
+
+    result = pd.DataFrame({
+        "date": pd.to_datetime(df["trade_date"]),
+        "code": code,
+        "open": pd.to_numeric(df["open"], errors="coerce"),
+        "high": pd.to_numeric(df["high"], errors="coerce"),
+        "low": pd.to_numeric(df["low"], errors="coerce"),
+        "close": pd.to_numeric(df["close"], errors="coerce"),
+        "volume": pd.to_numeric(df["vol"], errors="coerce"),
+        "amount": pd.to_numeric(df["amount"], errors="coerce"),
+    })
+
+    # Tushare: vol单位是手(100股), amount单位是千元 → 转换为股和元
+    result["volume"] = result["volume"] * 100
+    result["amount"] = result["amount"] * 1000
+
+    result.sort_values("date", inplace=True)
+    result.reset_index(drop=True, inplace=True)
+    return result
+
+
+def fetch_index_daily_tushare(
+    code: str, start_date: str, end_date: str
+) -> pd.DataFrame:
+    """通过 Tushare index_daily 获取指数日线行情。
+
+    Returns:
+        DataFrame with columns: date, code, close
+    """
+    import tushare as ts
+
+    pro = ts.pro_api(TUSHARE_TOKEN)
+    ts_code = _to_index_ts_code(code)
+    sd = start_date.replace("-", "")
+    ed = end_date.replace("-", "")
+
+    try:
+        df = pro.index_daily(ts_code=ts_code, start_date=sd, end_date=ed)
+    except Exception as exc:
+        logger.warning(f"Tushare index_daily 失败 ({ts_code}): {exc}")
+        return pd.DataFrame()
+
+    if df is None or df.empty:
+        logger.warning(f"Tushare 指数数据为空: {ts_code}")
+        return pd.DataFrame()
+
+    result = pd.DataFrame({
+        "date": pd.to_datetime(df["trade_date"]),
+        "close": pd.to_numeric(df["close"], errors="coerce"),
+        "code": code,
+    })
+
+    result.sort_values("date", inplace=True)
+    result.reset_index(drop=True, inplace=True)
+    return result
+
+
+def fetch_trading_calendar_tushare() -> pd.DataFrame:
+    """通过 Tushare trade_cal 获取交易日历。
+
+    Returns:
+        DataFrame with column: trade_date (datetime)
+    """
+    import tushare as ts
+
+    pro = ts.pro_api(TUSHARE_TOKEN)
+
+    try:
+        df = pro.trade_cal(exchange='SSE', start_date='20100101', end_date='20301231')
+    except Exception as exc:
+        logger.warning(f"Tushare 交易日历获取失败: {exc}")
+        return pd.DataFrame()
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # 仅保留交易日 (is_open == 1)
+    open_days = df[df["is_open"] == 1].copy()
+    result = pd.DataFrame({"trade_date": pd.to_datetime(open_days["cal_date"])})
+    result.sort_values("trade_date", inplace=True)
     result.reset_index(drop=True, inplace=True)
     return result
 

@@ -7,6 +7,9 @@ Usage:
     # 真实数据回测（AKShare + 缓存）
     python main.py
 
+    # Tushare Pro数据源回测（推荐）
+    python main.py --source tushare --tushare-token YOUR_TOKEN
+
     # 自定义日期范围
     python main.py --start 2023-01-01 --end 2024-12-31
 
@@ -32,6 +35,11 @@ from backtest.backtest_engine import BacktestEngine
 def parse_args():
     parser = argparse.ArgumentParser(description="ETF Rotation Strategy Backtest")
     parser.add_argument("--mock", action="store_true", help="Use mock data")
+    parser.add_argument("--source", type=str, default=None,
+                        choices=["akshare", "tushare"],
+                        help="Data source (akshare or tushare)")
+    parser.add_argument("--tushare-token", type=str, default=None,
+                        help="Tushare Pro API token")
     parser.add_argument("--start", type=str, default=None, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", type=str, default=None, help="End date (YYYY-MM-DD)")
     parser.add_argument("--capital", type=float, default=None, help="Initial capital")
@@ -57,6 +65,8 @@ def main():
         signal_config=SIGNAL_CONFIG,
         risk_config=RISK_CONFIG,
         use_mock=args.mock,
+        data_source=args.source,
+        tushare_token=args.tushare_token,
     )
 
     result = engine.run(progress=not args.no_progress)

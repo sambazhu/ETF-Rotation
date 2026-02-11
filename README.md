@@ -66,10 +66,13 @@ pip install -r requirements.txt
 # 3. 运行Mock回测（无需外部数据）
 python main.py --mock
 
-# 4. 运行真实数据回测
+# 4. 运行真实数据回测 (AKShare, 免费)
 python main.py --start 2023-01-01 --end 2025-12-31
 
-# 5. 自定义资金
+# 5. 使用Tushare Pro数据源（推荐，需token）
+python main.py --source tushare --tushare-token YOUR_TOKEN --start 2023-01-01 --end 2025-12-31
+
+# 6. 自定义资金
 python main.py --mock --capital 1000000
 ```
 

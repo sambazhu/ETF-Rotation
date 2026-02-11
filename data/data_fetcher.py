@@ -1,7 +1,7 @@
 """统一数据获取入口。
 
 职责：
-1. 协调AKShare API调用与本地缓存
+1. 协调 AKShare / Tushare Pro API调用与本地缓存
 2. 合并行情、份额、净值为完整数据集
 3. 提供带进度显示的批量获取
 4. 数据源可用性诊断
@@ -28,6 +28,12 @@ from data.data_sources import (
     fetch_trading_calendar_akshare,
     fetch_index_daily_akshare,
     generate_mock_etf_data,
+    # Tushare Pro
+    set_tushare_token,
+    probe_tushare,
+    fetch_etf_daily_tushare,
+    fetch_index_daily_tushare,
+    fetch_trading_calendar_tushare,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,7 +47,7 @@ class FetchResult:
 
 
 class DataFetcher:
-    """统一数据获取入口，优先缓存 → AKShare → Mock回退。"""
+    """统一数据获取入口，优先缓存 → Tushare/AKShare → Mock回退。"""
 
     def __init__(
         self,
@@ -49,14 +55,22 @@ class DataFetcher:
         fallback_to_mock: bool = True,
         cache_dir: Optional[str] = None,
         api_delay: float = 0.5,
+        tushare_token: Optional[str] = None,
     ):
         self.source = data_source
         self.fallback_to_mock = fallback_to_mock
         self.cache = CacheManager(cache_dir)
         self.api_delay = api_delay  # API调用间隔（秒），防止被限频
+
+        # Tushare token 初始化
+        if tushare_token:
+            set_tushare_token(tushare_token)
+
         self.source_status = self._probe_source()
 
     def _probe_source(self) -> DataSourceStatus:
+        if self.source == "tushare":
+            return probe_tushare()
         if self.source == "akshare":
             return probe_akshare()
         return DataSourceStatus(self.source, False, f"暂不支持: {self.source}")
@@ -86,13 +100,16 @@ class DataFetcher:
 
         if self.source_status.available:
             try:
-                df = fetch_etf_daily_akshare(code, start_date, end_date)
+                if self.source == "tushare":
+                    df = fetch_etf_daily_tushare(code, start_date, end_date)
+                else:
+                    df = fetch_etf_daily_akshare(code, start_date, end_date)
                 if not df.empty:
                     self.cache.append("etf_daily", code, df)
                     self._api_sleep()
-                    return FetchResult(df, "akshare", f"真实数据 {len(df)}条")
+                    return FetchResult(df, self.source, f"真实数据 {len(df)}条")
             except Exception as exc:
-                logger.warning(f"AKShare获取失败 ({code}): {exc}")
+                logger.warning(f"{self.source}获取失败 ({code}): {exc}")
                 if not self.fallback_to_mock:
                     raise
 
@@ -169,11 +186,14 @@ class DataFetcher:
 
         if self.source_status.available:
             try:
-                df = fetch_index_daily_akshare(code, start_date, end_date)
+                if self.source == "tushare":
+                    df = fetch_index_daily_tushare(code, start_date, end_date)
+                else:
+                    df = fetch_index_daily_akshare(code, start_date, end_date)
                 if not df.empty:
                     self.cache.append("index", code, df)
                     self._api_sleep()
-                    return FetchResult(df, "akshare", f"指数数据 {len(df)}条")
+                    return FetchResult(df, self.source, f"指数数据 {len(df)}条")
             except Exception as exc:
                 logger.warning(f"指数数据获取失败 ({code}): {exc}")
 
@@ -191,10 +211,13 @@ class DataFetcher:
 
         if self.source_status.available:
             try:
-                df = fetch_trading_calendar_akshare()
+                if self.source == "tushare":
+                    df = fetch_trading_calendar_tushare()
+                else:
+                    df = fetch_trading_calendar_akshare()
                 if not df.empty:
                     self.cache.write("calendar", "trade_dates", df)
-                    return FetchResult(df, "akshare", f"交易日历 {len(df)}条")
+                    return FetchResult(df, self.source, f"交易日历 {len(df)}条")
             except Exception as exc:
                 logger.warning(f"交易日历获取失败: {exc}")
 
