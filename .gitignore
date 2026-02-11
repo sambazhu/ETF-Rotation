@@ -23,12 +23,8 @@ env/
 Thumbs.db
 desktop.ini
 
-# Output / Cache
-output/
-cache/
+# Cache
 data/cache/
-*.csv
-*.parquet
 
 # Logs
 *.log
