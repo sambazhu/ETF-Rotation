@@ -34,4 +34,4 @@ data/cache/
 .agent/
 
 # Local Config
-.env
+# .env is now tracked
