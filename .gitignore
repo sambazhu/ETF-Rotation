@@ -35,3 +35,6 @@ data/cache/
 
 # Local Config
 # .env is now tracked
+
+# Claude Code CLI
+.claude/
