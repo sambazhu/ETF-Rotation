@@ -10,7 +10,7 @@
 
 获取ETF基金每日行情数据，包括开盘价、最高价、最低价、收盘价、成交量、成交额等。
 
-**数据更新时间**: 每日盘后
+**数据更新时间**: 每日15点-16点之间入库
 
 **限量**: 单次最大8000行数据
 
@@ -20,10 +20,10 @@
 
 | 名称 | 类型 | 必选 | 描述 |
 | --- | --- | --- | --- |
-| ts_code | str | N | ETF代码（如 510300.SH） |
+| ts_code | str | N | ETF代码（支持多个同时提取，逗号分隔，如 510300.SH,159915.SZ） |
 | trade_date | str | N | 交易日期（YYYYMMDD格式） |
-| start_date | str | N | 开始日期 |
-| end_date | str | N | 结束日期 |
+| start_date | str | N | 开始日期(YYYYMMDD) |
+| end_date | str | N | 结束日期(YYYYMMDD) |
 
 ---
 
@@ -59,6 +59,13 @@ df = pro.fund_daily(
     end_date='20241231'
 )
 
+# 获取多个ETF数据
+df = pro.fund_daily(
+    ts_code='510300.SH,159915.SZ',
+    start_date='20240101',
+    end_date='20241231'
+)
+
 # 获取某日所有ETF行情
 df = pro.fund_daily(trade_date='20241224')
 ```
@@ -76,12 +83,35 @@ df = pro.fund_daily(trade_date='20241224')
 
 ---
 
+## 本项目使用
+
+在 `data/data_sources.py` 中使用此接口获取ETF日线数据：
+
+```python
+def fetch_etf_daily_tushare(code, start_date, end_date):
+    """获取ETF日线数据。"""
+    import tushare as ts
+    pro = ts.pro_api(TUSHARE_TOKEN)
+
+    # 转换代码格式
+    ts_code = f"{code}.SH" if code.startswith('5') else f"{code}.SZ"
+
+    df = pro.fund_daily(
+        ts_code=ts_code,
+        start_date=start_date.replace('-', ''),
+        end_date=end_date.replace('-', '')
+    )
+    return df
+```
+
+---
+
 ## 字段映射
 
 | Tushare字段 | 系统字段 | 说明 |
 |------------|---------|------|
-| ts_code | code | 去掉后缀 |
-| trade_date | date | 格式转换 |
+| ts_code | code | 去掉后缀 (.SH/.SZ) |
+| trade_date | date | 格式转换为 YYYY-MM-DD |
 | open | open | 开盘价 |
 | high | high | 最高价 |
 | low | low | 最低价 |
@@ -96,3 +126,4 @@ df = pro.fund_daily(trade_date='20241224')
 1. 成交量单位是"手"，1手=100股
 2. 成交额单位是"千元"
 3. 代码格式需要带交易所后缀（.SH/.SZ）
+4. 停牌期间不提供数据
