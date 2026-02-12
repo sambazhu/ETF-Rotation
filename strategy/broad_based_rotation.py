@@ -41,24 +41,42 @@ class BroadBasedRotation:
         if broad_snapshot.empty:
             return pd.DataFrame(
                 columns=["code", "name", "style", "score",
-                         "mfi_z", "mfa_z", "pdi_z", "cmc_z", "rank", "signal"]
+                         "mfi_z", "mfa_z", "pdi_z", "cmc_z",
+                         "mfi_weight", "mfa_weight", "pdi_weight", "cmc_weight",
+                         "mfi_contrib", "mfa_contrib", "pdi_contrib", "cmc_contrib",
+                         "rank", "signal"]
             )
 
         scored = broad_snapshot.copy()
 
         # 提取Z-score（缺失用0）
-        mfi_z = scored["mfi_z"].fillna(0) if "mfi_z" in scored.columns else 0.0
-        mfa_z = scored["mfa_z"].fillna(0) if "mfa_z" in scored.columns else 0.0
-        pdi_z = scored["pdi_z"].fillna(0) if "pdi_z" in scored.columns else 0.0
-        cmc_z = scored["cmc_z"].fillna(0) if "cmc_z" in scored.columns else 0.0
+        mfi_z = scored["mfi_z"].fillna(0) if "mfi_z" in scored.columns else pd.Series(0.0, index=scored.index)
+        mfa_z = scored["mfa_z"].fillna(0) if "mfa_z" in scored.columns else pd.Series(0.0, index=scored.index)
+        pdi_z = scored["pdi_z"].fillna(0) if "pdi_z" in scored.columns else pd.Series(0.0, index=scored.index)
+        cmc_z = scored["cmc_z"].fillna(0) if "cmc_z" in scored.columns else pd.Series(0.0, index=scored.index)
+
+        mfi_weight = self.weights.get("mfi", 0.40)
+        mfa_weight = self.weights.get("mfa", 0.15)
+        pdi_weight = self.weights.get("pdi", 0.25)
+        cmc_weight = self.weights.get("cmc", 0.20)
+
+        scored["mfi_weight"] = mfi_weight
+        scored["mfa_weight"] = mfa_weight
+        scored["pdi_weight"] = pdi_weight
+        scored["cmc_weight"] = cmc_weight
+
+        scored["mfi_contrib"] = mfi_z * mfi_weight * self.scale_factor
+        scored["mfa_contrib"] = mfa_z * mfa_weight * self.scale_factor
+        scored["pdi_contrib"] = (-pdi_z) * pdi_weight * self.scale_factor
+        scored["cmc_contrib"] = cmc_z * cmc_weight * self.scale_factor
 
         # 加权合成（PRD公式: PDI取负，折价+资金流入=买入信号）
         scored["score"] = (
-            mfi_z * self.weights.get("mfi", 0.40)
-            + mfa_z * self.weights.get("mfa", 0.15)
-            + (-pdi_z) * self.weights.get("pdi", 0.25)
-            + cmc_z * self.weights.get("cmc", 0.20)
-        ) * self.scale_factor
+            scored["mfi_contrib"]
+            + scored["mfa_contrib"]
+            + scored["pdi_contrib"]
+            + scored["cmc_contrib"]
+        )
 
         scored["score"] = scored["score"].clip(-100, 100)
 
@@ -71,7 +89,12 @@ class BroadBasedRotation:
 
         # 保留关键列
         out_cols = ["code", "score", "rank", "signal"]
-        for col in ["name", "style", "mfi_z", "mfa_z", "pdi_z", "cmc_z"]:
+        for col in [
+            "name", "style",
+            "mfi_z", "mfa_z", "pdi_z", "cmc_z",
+            "mfi_weight", "mfa_weight", "pdi_weight", "cmc_weight",
+            "mfi_contrib", "mfa_contrib", "pdi_contrib", "cmc_contrib",
+        ]:
             if col in scored.columns:
                 out_cols.append(col)
 

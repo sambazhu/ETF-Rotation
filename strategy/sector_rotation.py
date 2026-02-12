@@ -49,6 +49,10 @@ class SectorRotation:
                 columns=["code", "name", "category", "score",
                          "sector_flow_z", "accel_z", "premium_z",
                          "rel_momentum", "valuation_z",
+                         "fund_flow_weight", "flow_acceleration_weight",
+                         "intraday_premium_weight", "relative_momentum_weight", "valuation_weight",
+                         "fund_flow_contrib", "flow_acceleration_contrib", "intraday_premium_contrib",
+                         "relative_momentum_contrib", "valuation_contrib",
                          "overheat", "rank", "signal"]
             )
 
@@ -59,6 +63,18 @@ class SectorRotation:
         accel_z = self._safe_col(scored, "mfa_z")
         prem_z = self._safe_col(scored, "intraday_premium_proxy_z")
         val_z = self._safe_col(scored, "valuation_pct_z")
+
+        fund_flow_weight = self.weights.get("fund_flow", 0.40)
+        flow_acceleration_weight = self.weights.get("flow_acceleration", 0.15)
+        intraday_premium_weight = self.weights.get("intraday_premium", 0.10)
+        relative_momentum_weight = self.weights.get("relative_momentum", 0.25)
+        valuation_weight = self.weights.get("valuation", 0.10)
+
+        scored["fund_flow_weight"] = fund_flow_weight
+        scored["flow_acceleration_weight"] = flow_acceleration_weight
+        scored["intraday_premium_weight"] = intraday_premium_weight
+        scored["relative_momentum_weight"] = relative_momentum_weight
+        scored["valuation_weight"] = valuation_weight
 
         # 相对动量: 自身20日收益 - 基准20日收益，再标准化为Z-score
         if "ret_20d" in scored.columns:
@@ -75,14 +91,20 @@ class SectorRotation:
 
         rel_mom_z = scored["rel_momentum_z"]
 
+        scored["fund_flow_contrib"] = flow_z * fund_flow_weight * self.scale_factor
+        scored["flow_acceleration_contrib"] = accel_z * flow_acceleration_weight * self.scale_factor
+        scored["intraday_premium_contrib"] = prem_z * intraday_premium_weight * self.scale_factor
+        scored["relative_momentum_contrib"] = rel_mom_z * relative_momentum_weight * self.scale_factor
+        scored["valuation_contrib"] = (-val_z) * valuation_weight * self.scale_factor
+
         # 加权合成
         scored["score"] = (
-            flow_z * self.weights.get("fund_flow", 0.40)
-            + accel_z * self.weights.get("flow_acceleration", 0.15)
-            + prem_z * self.weights.get("intraday_premium", 0.10)
-            + rel_mom_z * self.weights.get("relative_momentum", 0.25)
-            + (-val_z) * self.weights.get("valuation", 0.10)  # 低估值→高分
-        ) * self.scale_factor
+            scored["fund_flow_contrib"]
+            + scored["flow_acceleration_contrib"]
+            + scored["intraday_premium_contrib"]
+            + scored["relative_momentum_contrib"]
+            + scored["valuation_contrib"]
+        )
 
         # 过热过滤器
         scored["overheat"] = False
@@ -101,10 +123,28 @@ class SectorRotation:
         scored["signal"] = scored["score"].apply(self._score_to_signal)
 
         # 输出列
-        out_cols = ["code", "score", "rank", "signal", "overheat", "rel_momentum"]
+        out_cols = ["code", "score", "rank", "signal", "overheat", "rel_momentum", "rel_momentum_z"]
         for col in ["name", "category", "sector_flow_strength_z", "mfa_z",
                      "intraday_premium_proxy_z", "valuation_pct_z"]:
             if col in scored.columns:
+                out_cols.append(col)
+
+        rename_map = {
+            "sector_flow_strength_z": "sector_flow_z",
+            "mfa_z": "accel_z",
+            "intraday_premium_proxy_z": "premium_z",
+            "valuation_pct_z": "valuation_z",
+        }
+        scored = scored.rename(columns=rename_map)
+
+        for col in [
+            "fund_flow_weight", "flow_acceleration_weight", "intraday_premium_weight",
+            "relative_momentum_weight", "valuation_weight",
+            "fund_flow_contrib", "flow_acceleration_contrib", "intraday_premium_contrib",
+            "relative_momentum_contrib", "valuation_contrib",
+            "sector_flow_z", "accel_z", "premium_z", "valuation_z",
+        ]:
+            if col not in out_cols and col in scored.columns:
                 out_cols.append(col)
 
         return scored[[c for c in out_cols if c in scored.columns]]

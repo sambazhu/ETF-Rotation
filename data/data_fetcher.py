@@ -32,6 +32,7 @@ from data.data_sources import (
     set_tushare_token,
     probe_tushare,
     fetch_etf_daily_tushare,
+    fetch_etf_shares_tushare,
     fetch_index_daily_tushare,
     fetch_trading_calendar_tushare,
 )
@@ -272,9 +273,9 @@ class DataFetcher:
 
             result[code] = df
             status = daily_result.source
-            print(f"✓ ({status}, {len(df)}条)")
+            print(f"[OK] ({status}, {len(df)} rows)")
 
-        print(f"\n完成! 共获取 {len(result)} 只ETF数据")
+        print(f"\nDone! Got {len(result)} ETFs")
         return result
 
     def fetch_shares_for_period(
@@ -283,15 +284,32 @@ class DataFetcher:
         end_date: str,
         codes: Optional[List[str]] = None,
     ) -> pd.DataFrame:
-        """获取一段时间内指定ETF的份额数据（按日逐日获取后合并）。
+        """获取一段时间内指定ETF的份额数据。
 
-        注意：份额API按日期查询全市场，逐日获取可能较慢。
-        建议先获取交易日历，再对每个交易日调用。
+        Tushare模式: 使用 etf_share_size 批量查询（推荐）
+        AKShare模式: 逐日查询（较慢）
 
         Returns:
             DataFrame with columns: date, code, share_total
         """
-        target_codes = set(codes or get_all_etf_codes())
+        target_codes = list(codes or get_all_etf_codes())
+
+        # Tushare模式: 批量查询份额数据
+        if self.source == "tushare" and self.source_status.available:
+            print(f"  使用Tushare获取份额数据 ({len(target_codes)}只ETF)...")
+            try:
+                df = fetch_etf_shares_tushare(target_codes, start_date, end_date)
+                if not df.empty:
+                    print(f"  份额数据完成! {len(df)}条记录")
+                    return df
+                else:
+                    print("  Tushare份额数据为空，回退到AKShare...")
+            except Exception as exc:
+                logger.warning(f"Tushare份额获取失败: {exc}")
+                print(f"  Tushare份额获取失败: {exc}")
+
+        # AKShare模式: 逐日查询（原有逻辑）
+        target_codes_set = set(target_codes)
 
         # 获取交易日历
         cal_result = self.fetch_trading_calendar()
@@ -313,7 +331,7 @@ class DataFetcher:
 
             result = self.fetch_etf_shares(date_str)
             if not result.data.empty:
-                filtered = result.data[result.data["code"].isin(target_codes)]
+                filtered = result.data[result.data["code"].isin(target_codes_set)]
                 if not filtered.empty:
                     all_shares.append(filtered)
 

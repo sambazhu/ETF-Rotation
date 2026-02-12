@@ -164,17 +164,17 @@ class ReportGenerator:
         fig, ax = plt.subplots(figsize=(12, 5))
 
         ax.plot(nav.index, nav.values, color=COLORS["strategy"],
-                linewidth=1.8, label="Strategy", zorder=3)
+                linewidth=1.8, label="策略净值", zorder=3)
         if benchmark is not None and not benchmark.empty:
             common = nav.index.intersection(benchmark.index)
             if len(common) > 0:
                 ax.plot(common, benchmark.loc[common].values,
                         color=COLORS["benchmark"], linewidth=1.2,
-                        label="Benchmark (HS300)", linestyle="--", zorder=2)
+                        label="基准(沪深300)", linestyle="--", zorder=2)
 
         ax.axhline(y=1.0, color="#BDBDBD", linewidth=0.8, linestyle=":")
-        ax.set_title("Strategy NAV Curve", fontsize=14, fontweight="bold")
-        ax.set_ylabel("NAV")
+        ax.set_title("策略净值曲线", fontsize=14, fontweight="bold")
+        ax.set_ylabel("净值")
         ax.legend(loc="upper left")
         ax.grid(True, alpha=0.3)
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
@@ -195,8 +195,8 @@ class ReportGenerator:
         ax.plot(drawdown.index, drawdown.values,
                 color=COLORS["drawdown"], linewidth=1.0)
 
-        ax.set_title("Drawdown", fontsize=14, fontweight="bold")
-        ax.set_ylabel("Drawdown")
+        ax.set_title("回撤曲线", fontsize=14, fontweight="bold")
+        ax.set_ylabel("回撤")
         ax.yaxis.set_major_formatter(PercentFormatter(1.0))
         ax.grid(True, alpha=0.3)
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
@@ -235,12 +235,12 @@ class ReportGenerator:
         fig, ax = plt.subplots(figsize=(12, 4))
         ax.stackplot(dates,
                      [broad_pcts, sector_pcts, cash_pcts],
-                     labels=["Broad-based", "Sector", "Cash"],
+                     labels=["宽基", "行业", "现金"],
                      colors=[COLORS["broad"], COLORS["sector"], COLORS["cash"]],
                      alpha=0.85)
 
-        ax.set_title("Position Allocation", fontsize=14, fontweight="bold")
-        ax.set_ylabel("Weight")
+        ax.set_title("仓位分布", fontsize=14, fontweight="bold")
+        ax.set_ylabel("权重")
         ax.yaxis.set_major_formatter(PercentFormatter(1.0))
         ax.set_ylim(0, 1)
         ax.legend(loc="upper right", fontsize=9)
@@ -259,8 +259,8 @@ class ReportGenerator:
         colors_list = [COLORS["profit"] if r >= 0 else COLORS["loss"] for r in returns]
         ax.bar(range(len(months)), returns, color=colors_list, alpha=0.85, width=0.7)
 
-        ax.set_title("Monthly Returns", fontsize=14, fontweight="bold")
-        ax.set_ylabel("Return")
+        ax.set_title("月度收益", fontsize=14, fontweight="bold")
+        ax.set_ylabel("收益率")
         ax.yaxis.set_major_formatter(PercentFormatter(1.0))
         ax.axhline(y=0, color="black", linewidth=0.8)
         ax.set_xticks(range(len(months)))
@@ -287,8 +287,8 @@ class ReportGenerator:
                          where=scores > 0, color=COLORS["bullish"], alpha=0.15)
         ax1.fill_between(dates, scores, 0,
                          where=scores < 0, color=COLORS["bearish"], alpha=0.15)
-        ax1.set_title("Macro Score & Regime", fontsize=14, fontweight="bold")
-        ax1.set_ylabel("Score")
+        ax1.set_title("宏观评分与市场状态", fontsize=14, fontweight="bold")
+        ax1.set_ylabel("评分")
         ax1.grid(True, alpha=0.3)
 
         # 仓位比例
@@ -296,7 +296,7 @@ class ReportGenerator:
             ratios = signals_df["equity_ratio"].fillna(0.5)
             ax2.fill_between(dates, ratios, 0, color=COLORS["strategy"], alpha=0.4)
             ax2.plot(dates, ratios, color=COLORS["strategy"], linewidth=1.0)
-        ax2.set_ylabel("Equity Ratio")
+        ax2.set_ylabel("权益仓位")
         ax2.yaxis.set_major_formatter(PercentFormatter(1.0))
         ax2.set_ylim(0, 1)
         ax2.grid(True, alpha=0.3)
@@ -311,15 +311,15 @@ class ReportGenerator:
         # 1. 买卖次数
         buy_count = len(trades_df[trades_df["direction"] == "buy"])
         sell_count = len(trades_df[trades_df["direction"] == "sell"])
-        axes[0].bar(["Buy", "Sell"], [buy_count, sell_count],
+        axes[0].bar(["买入", "卖出"], [buy_count, sell_count],
                     color=[COLORS["buy"], COLORS["sell"]], alpha=0.85)
-        axes[0].set_title("Trade Count", fontsize=12, fontweight="bold")
+        axes[0].set_title("交易笔数", fontsize=12, fontweight="bold")
 
         # 2. 按标的分布（前10）
         top_codes = trades_df["code"].value_counts().head(10)
         axes[1].barh(top_codes.index[::-1], top_codes.values[::-1],
                      color=COLORS["strategy"], alpha=0.75)
-        axes[1].set_title("Top 10 Traded ETFs", fontsize=12, fontweight="bold")
+        axes[1].set_title("交易最活跃前10ETF", fontsize=12, fontweight="bold")
         axes[1].tick_params(axis="y", labelsize=8)
 
         # 3. 按原因分布
@@ -327,7 +327,7 @@ class ReportGenerator:
         axes[2].pie(reason_counts.values, labels=reason_counts.index,
                     autopct="%1.0f%%", startangle=90,
                     colors=["#2196F3", "#FF9800", "#4CAF50", "#F44336"][:len(reason_counts)])
-        axes[2].set_title("Trade Reasons", fontsize=12, fontweight="bold")
+        axes[2].set_title("交易原因分布", fontsize=12, fontweight="bold")
 
         fig.tight_layout()
         return fig
@@ -346,7 +346,7 @@ class ReportGenerator:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ETF Rotation Strategy - Backtest Report</title>
+    <title>ETF轮动策略 - 回测报告</title>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
@@ -449,22 +449,22 @@ class ReportGenerator:
 <body>
 
 <div class="header">
-    <h1>ETF Rotation Strategy</h1>
-    <p>Backtest Report | {metrics.get('trading_days', 0)} Trading Days | {metrics.get('years', 0)} Years</p>
+    <h1>ETF轮动策略</h1>
+    <p>回测报告 | {metrics.get('trading_days', 0)} 个交易日 | {metrics.get('years', 0)} 年</p>
 </div>
 
 <div class="container">
 
     <!-- Metrics Cards -->
     <div class="metrics-grid">
-        {self._metric_card("Total Return", metrics.get("total_return", 0), fmt="pct")}
-        {self._metric_card("Annual Return", metrics.get("annual_return", 0), fmt="pct")}
-        {self._metric_card("Max Drawdown", metrics.get("max_drawdown", 0), fmt="pct")}
-        {self._metric_card("Sharpe Ratio", metrics.get("sharpe_ratio", 0), fmt="num")}
-        {self._metric_card("Calmar Ratio", metrics.get("calmar_ratio", 0), fmt="num")}
-        {self._metric_card("Sortino Ratio", metrics.get("sortino_ratio", 0), fmt="num")}
-        {self._metric_card("Win Rate", metrics.get("win_rate", 0), fmt="pct")}
-        {self._metric_card("Total Trades", metrics.get("total_trades", 0), fmt="int")}
+        {self._metric_card("总收益率", metrics.get("total_return", 0), fmt="pct")}
+        {self._metric_card("年化收益率", metrics.get("annual_return", 0), fmt="pct")}
+        {self._metric_card("最大回撤", metrics.get("max_drawdown", 0), fmt="pct")}
+        {self._metric_card("夏普比率", metrics.get("sharpe_ratio", 0), fmt="num")}
+        {self._metric_card("卡尔马比率", metrics.get("calmar_ratio", 0), fmt="num")}
+        {self._metric_card("索提诺比率", metrics.get("sortino_ratio", 0), fmt="num")}
+        {self._metric_card("胜率", metrics.get("win_rate", 0), fmt="pct")}
+        {self._metric_card("总交易笔数", metrics.get("total_trades", 0), fmt="int")}
     </div>
 
     <!-- Benchmark comparison -->
@@ -472,58 +472,58 @@ class ReportGenerator:
 
     <!-- NAV Curve -->
     <div class="chart-section">
-        <h2>Net Asset Value Curve</h2>
-        <img src="data:image/png;base64,{nav_b64}" alt="NAV Curve">
+        <h2>策略净值曲线</h2>
+        <img src="data:image/png;base64,{nav_b64}" alt="策略净值曲线">
     </div>
 
     <!-- Drawdown -->
     <div class="chart-section">
-        <h2>Drawdown</h2>
-        <img src="data:image/png;base64,{dd_b64}" alt="Drawdown">
+        <h2>回撤曲线</h2>
+        <img src="data:image/png;base64,{dd_b64}" alt="回撤曲线">
     </div>
 
     <!-- Position Allocation -->
     {"" if not pos_b64 else f'''
     <div class="chart-section">
-        <h2>Position Allocation</h2>
-        <img src="data:image/png;base64,{pos_b64}" alt="Position Allocation">
+        <h2>仓位分布</h2>
+        <img src="data:image/png;base64,{pos_b64}" alt="仓位分布">
     </div>
     '''}
 
     <!-- Monthly Returns -->
     {"" if not monthly_b64 else f'''
     <div class="chart-section">
-        <h2>Monthly Returns</h2>
-        <img src="data:image/png;base64,{monthly_b64}" alt="Monthly Returns">
+        <h2>月度收益</h2>
+        <img src="data:image/png;base64,{monthly_b64}" alt="月度收益">
     </div>
     '''}
 
     <!-- Macro Signals -->
     {"" if not macro_b64 else f'''
     <div class="chart-section">
-        <h2>Macro Score &amp; Equity Ratio</h2>
-        <img src="data:image/png;base64,{macro_b64}" alt="Macro Signals">
+        <h2>宏观评分与权益仓位</h2>
+        <img src="data:image/png;base64,{macro_b64}" alt="宏观评分与权益仓位">
     </div>
     '''}
 
     <!-- Trade Distribution -->
     {"" if not trade_b64 else f'''
     <div class="chart-section">
-        <h2>Trade Distribution</h2>
-        <img src="data:image/png;base64,{trade_b64}" alt="Trade Distribution">
+        <h2>交易分布</h2>
+        <img src="data:image/png;base64,{trade_b64}" alt="交易分布">
     </div>
     '''}
 
     <!-- Trade Log -->
     <div class="chart-section">
-        <h2>Recent Trades (last 50)</h2>
+        <h2>最近交易（近50笔）</h2>
         {self._trades_table(trades_df)}
     </div>
 
 </div>
 
 <div class="footer">
-    Generated by ETF Rotation Strategy Backtest System
+    由ETF轮动策略回测系统生成
 </div>
 
 </body>
@@ -555,34 +555,36 @@ class ReportGenerator:
             return ""
         return f'''
     <div class="metrics-grid" style="grid-template-columns: repeat(3, 1fr);">
-        {ReportGenerator._metric_card("Benchmark Return", metrics.get("benchmark_return", 0), "pct")}
-        {ReportGenerator._metric_card("Excess Return", metrics.get("excess_return", 0), "pct")}
-        {ReportGenerator._metric_card("Info Ratio", metrics.get("information_ratio", 0), "num")}
+        {ReportGenerator._metric_card("基准收益率", metrics.get("benchmark_return", 0), "pct")}
+        {ReportGenerator._metric_card("超额收益率", metrics.get("excess_return", 0), "pct")}
+        {ReportGenerator._metric_card("信息比率", metrics.get("information_ratio", 0), "num")}
     </div>'''
 
     @staticmethod
     def _trades_table(trades_df: pd.DataFrame) -> str:
         if trades_df.empty:
-            return "<p>No trades recorded.</p>"
+            return "<p>暂无交易记录。</p>"
 
         recent = trades_df.tail(50).iloc[::-1]
         rows = []
         for _, t in recent.iterrows():
             d_cls = "buy" if t["direction"] == "buy" else "sell"
+            direction_cn = t.get("direction_cn", str(t["direction"]))
+            reason_cn = t.get("reason_cn", str(t["reason"]))
             rows.append(f'''<tr>
                 <td>{str(t["date"])[:10]}</td>
                 <td>{t["code"]}</td>
-                <td class="{d_cls}">{t["direction"].upper()}</td>
+                <td class="{d_cls}">{direction_cn}</td>
                 <td>{t["quantity"]:,.0f}</td>
                 <td>{t["price"]:.4f}</td>
                 <td>{t["amount"]:,.0f}</td>
-                <td>{t["reason"]}</td>
+                <td>{reason_cn}</td>
             </tr>''')
 
         return f'''<table class="trade-table">
             <thead><tr>
-                <th>Date</th><th>Code</th><th>Dir</th>
-                <th>Qty</th><th>Price</th><th>Amount</th><th>Reason</th>
+                <th>日期</th><th>代码</th><th>方向</th>
+                <th>数量</th><th>价格</th><th>金额</th><th>原因</th>
             </tr></thead>
             <tbody>{"".join(rows)}</tbody>
         </table>'''

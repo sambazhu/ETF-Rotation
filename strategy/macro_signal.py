@@ -72,6 +72,16 @@ class MacroSignal:
         if market_snapshot.empty:
             return {
                 "score": 0.0,
+                "net_inflow_z": 0.0,
+                "flow_acceleration_z": 0.0,
+                "intraday_premium_z": 0.0,
+                "premium_z": 0.0,
+                "momentum_z": 0.0,
+                "net_inflow_contrib": 0.0,
+                "flow_acceleration_contrib": 0.0,
+                "intraday_premium_contrib": 0.0,
+                "premium_contrib": 0.0,
+                "momentum_contrib": 0.0,
                 "net_inflow_component": 0.0,
                 "accel_component": 0.0,
                 "intraday_prem_component": 0.0,
@@ -88,14 +98,26 @@ class MacroSignal:
         premium_z = self._safe_mean(market_snapshot, "premium_rate_z")
         momentum_z = self._safe_mean(market_snapshot, "cmc_z")
 
+        net_inflow_weight = self.weights.get("net_inflow", 0.35)
+        flow_acceleration_weight = self.weights.get("flow_acceleration", 0.15)
+        intraday_premium_weight = self.weights.get("intraday_premium", 0.10)
+        premium_weight = self.weights.get("premium", 0.20)
+        momentum_weight = self.weights.get("momentum", 0.20)
+
+        net_inflow_contrib = net_inflow_z * net_inflow_weight * self.scale_factor
+        flow_acceleration_contrib = accel_z * flow_acceleration_weight * self.scale_factor
+        intraday_premium_contrib = intraday_prem_z * intraday_premium_weight * self.scale_factor
+        premium_contrib = (-premium_z) * premium_weight * self.scale_factor
+        momentum_contrib = momentum_z * momentum_weight * self.scale_factor
+
         # 加权合成（PRD公式）
         score = (
-            net_inflow_z * self.weights.get("net_inflow", 0.35)
-            + accel_z * self.weights.get("flow_acceleration", 0.15)
-            + intraday_prem_z * self.weights.get("intraday_premium", 0.10)
-            + (-premium_z) * self.weights.get("premium", 0.20)  # 高溢价→看空
-            + momentum_z * self.weights.get("momentum", 0.20)
-        ) * self.scale_factor
+            net_inflow_contrib
+            + flow_acceleration_contrib
+            + intraday_premium_contrib
+            + premium_contrib
+            + momentum_contrib
+        )
 
         score = _clip_score(score)
         self.scores_history.append(score)
@@ -109,6 +131,16 @@ class MacroSignal:
 
         return {
             "score": float(score),
+            "net_inflow_z": float(net_inflow_z),
+            "flow_acceleration_z": float(accel_z),
+            "intraday_premium_z": float(intraday_prem_z),
+            "premium_z": float(premium_z),
+            "momentum_z": float(momentum_z),
+            "net_inflow_contrib": float(net_inflow_contrib),
+            "flow_acceleration_contrib": float(flow_acceleration_contrib),
+            "intraday_premium_contrib": float(intraday_premium_contrib),
+            "premium_contrib": float(premium_contrib),
+            "momentum_contrib": float(momentum_contrib),
             "net_inflow_component": float(net_inflow_z * self.scale_factor),
             "accel_component": float(accel_z * self.scale_factor),
             "intraday_prem_component": float(intraday_prem_z * self.scale_factor),

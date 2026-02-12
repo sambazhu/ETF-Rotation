@@ -474,6 +474,66 @@ def fetch_trading_calendar_tushare() -> pd.DataFrame:
     return result
 
 
+def fetch_etf_shares_tushare(
+    codes: list,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """通过 Tushare etf_share_size 获取ETF份额数据。
+
+    接口说明:
+    - 单次最大5000条，可根据代码或日期循环提取
+    - 需要8000积分
+
+    Args:
+        codes: ETF代码列表（6位代码）
+        start_date: 开始日期 (YYYY-MM-DD 或 YYYYMMDD)
+        end_date: 结束日期 (YYYY-MM-DD 或 YYYYMMDD)
+
+    Returns:
+        DataFrame with columns: date, code, share_total (万份)
+    """
+    import tushare as ts
+
+    pro = ts.pro_api(TUSHARE_TOKEN)
+    sd = start_date.replace("-", "")
+    ed = end_date.replace("-", "")
+
+    all_parts = []
+
+    for code in codes:
+        ts_code = _to_ts_code(code)
+        try:
+            df = pro.etf_share_size(
+                ts_code=ts_code,
+                start_date=sd,
+                end_date=ed,
+            )
+        except Exception as exc:
+            logger.warning(f"Tushare etf_share_size 失败 ({ts_code}): {exc}")
+            continue
+
+        if df is None or df.empty:
+            continue
+
+        # 字段映射: total_share (万份)
+        part = pd.DataFrame({
+            "date": pd.to_datetime(df["trade_date"]),
+            "code": code,
+            "share_total": pd.to_numeric(df["total_share"], errors="coerce"),
+        })
+        all_parts.append(part)
+        logger.info(f"Tushare份额数据: {code} {len(part)}条")
+
+    if not all_parts:
+        return pd.DataFrame()
+
+    result = pd.concat(all_parts, ignore_index=True)
+    result.sort_values(["code", "date"], inplace=True)
+    result.reset_index(drop=True, inplace=True)
+    return result
+
+
 # ──────────────────────────────────────────────
 # Mock数据生成
 # ──────────────────────────────────────────────

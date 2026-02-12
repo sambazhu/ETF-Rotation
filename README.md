@@ -96,7 +96,9 @@ python main.py --mock --capital 1000000
 | `trade_stats.png` | 交易分布统计 |
 | `trades.csv` | 全部交易明细 |
 | `nav.csv` | 每日净值序列 |
-| `signals.csv` | 每日信号记录 |
+| `signals.csv` | 每日信号记录（含宏观/宽基/行业因子明细） |
+| `rebalances.csv` | 每次调仓评估明细（触发层级、因子、仓位变化） |
+| `positions_detail.csv` | 每日仓位快照明细（总资产、现金、持仓JSON） |
 
 ## 核心指标
 

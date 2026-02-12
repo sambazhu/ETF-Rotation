@@ -165,7 +165,7 @@ def verify_performance() -> int:
 
     # Format report
     report = PerformanceAnalyzer.format_report(metrics)
-    print_result("format_report", "Sharpe" in report and "Annual" in report,
+    print_result("format_report", "回测绩效报告" in report and "年化收益率" in report,
                  f"{len(report)} chars")
 
     # Empty input

@@ -236,28 +236,28 @@ class PerformanceAnalyzer:
         """格式化绩效报告为可读字符串。"""
         lines = [
             "=" * 50,
-            "  Backtest Performance Report",
+            "  回测绩效报告",
             "=" * 50,
             "",
-            f"  Total Return:     {metrics.get('total_return', 0):.2%}",
-            f"  Annual Return:    {metrics.get('annual_return', 0):.2%}",
-            f"  Max Drawdown:     {metrics.get('max_drawdown', 0):.2%}",
-            f"  Annual Vol:       {metrics.get('annual_volatility', 0):.2%}",
-            f"  Sharpe Ratio:     {metrics.get('sharpe_ratio', 0):.3f}",
-            f"  Calmar Ratio:     {metrics.get('calmar_ratio', 0):.3f}",
-            f"  Sortino Ratio:    {metrics.get('sortino_ratio', 0):.3f}",
+            f"  总收益率:         {metrics.get('total_return', 0):.2%}",
+            f"  年化收益率:       {metrics.get('annual_return', 0):.2%}",
+            f"  最大回撤:         {metrics.get('max_drawdown', 0):.2%}",
+            f"  年化波动率:       {metrics.get('annual_volatility', 0):.2%}",
+            f"  夏普比率:         {metrics.get('sharpe_ratio', 0):.3f}",
+            f"  卡尔马比率:       {metrics.get('calmar_ratio', 0):.3f}",
+            f"  索提诺比率:       {metrics.get('sortino_ratio', 0):.3f}",
             "",
-            f"  Total Trades:     {metrics.get('total_trades', 0)}",
-            f"  Win Rate:         {metrics.get('win_rate', 0):.1%}",
-            f"  Profit/Loss:      {metrics.get('profit_loss_ratio', 0):.2f}",
-            f"  Commission:       {metrics.get('total_commission', 0):.2f}",
+            f"  总交易笔数:       {metrics.get('total_trades', 0)}",
+            f"  胜率:             {metrics.get('win_rate', 0):.1%}",
+            f"  盈亏比:           {metrics.get('profit_loss_ratio', 0):.2f}",
+            f"  总交易成本:       {metrics.get('total_commission', 0):.2f}",
             "",
         ]
         if "benchmark_return" in metrics:
             lines.extend([
-                f"  Benchmark Return: {metrics['benchmark_return']:.2%}",
-                f"  Excess Return:    {metrics['excess_return']:.2%}",
-                f"  Info Ratio:       {metrics.get('information_ratio', 0):.3f}",
+                f"  基准收益率:       {metrics['benchmark_return']:.2%}",
+                f"  超额收益率:       {metrics['excess_return']:.2%}",
+                f"  信息比率:         {metrics.get('information_ratio', 0):.3f}",
                 "",
             ])
         lines.append("=" * 50)

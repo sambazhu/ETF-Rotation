@@ -27,6 +27,17 @@ from strategy.broad_based_rotation import BroadBasedRotation
 from strategy.sector_rotation import SectorRotation
 
 
+def _safe_float(value, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        if pd.isna(value):
+            return default
+    except Exception:
+        pass
+    return float(value)
+
+
 class SignalGenerator:
     """聚合宏观、宽基、行业三层信号（v2.0）。"""
 
@@ -111,6 +122,12 @@ class SignalGenerator:
             max_single=0.15 if self.choppy_mode else 0.30,
         )
 
+        broad_details = self._build_broad_details(broad_ranked, broad_weights)
+        sector_details = self._build_sector_details(sector_ranked, sector_weights)
+
+        broad_target_exposure = float(sum(broad_weights.values())) if broad_weights else 0.0
+        sector_target_exposure = float(sum(sector_weights.values())) if sector_weights else 0.0
+
         return {
             "date": pd.Timestamp(date),
             "macro": macro_signal,
@@ -120,8 +137,97 @@ class SignalGenerator:
             "sector_weights": sector_weights,
             "target_weights": {**broad_weights, **sector_weights},
             "total_equity_ratio": equity_ratio,
+            "weight_split": {
+                "broad_pct": broad_pct,
+                "sector_pct": sector_pct,
+                "broad_target_exposure": broad_target_exposure,
+                "sector_target_exposure": sector_target_exposure,
+            },
+            "broad_details": broad_details,
+            "sector_details": sector_details,
+            "broad_target_details": [item for item in broad_details if item.get("target_weight", 0) > 0],
+            "sector_target_details": [item for item in sector_details if item.get("target_weight", 0) > 0],
             "choppy_mode": self.choppy_mode,
         }
+
+    def _build_broad_details(self, ranked: pd.DataFrame, target_weights: Dict[str, float]) -> List[Dict]:
+        if ranked is None or ranked.empty:
+            return []
+
+        details = []
+        for _, row in ranked.head(10).iterrows():
+            code = str(row.get("code", ""))
+            details.append({
+                "code": code,
+                "name": row.get("name", ""),
+                "style": row.get("style", ""),
+                "rank": int(_safe_float(row.get("rank", 0))),
+                "signal": row.get("signal", ""),
+                "score": round(_safe_float(row.get("score", 0)), 4),
+                "target_weight": round(_safe_float(target_weights.get(code, 0.0)), 4),
+                "factors": {
+                    "mfi_z": round(_safe_float(row.get("mfi_z", 0)), 4),
+                    "mfa_z": round(_safe_float(row.get("mfa_z", 0)), 4),
+                    "pdi_z": round(_safe_float(row.get("pdi_z", 0)), 4),
+                    "cmc_z": round(_safe_float(row.get("cmc_z", 0)), 4),
+                },
+                "weights": {
+                    "mfi": round(_safe_float(row.get("mfi_weight", 0)), 4),
+                    "mfa": round(_safe_float(row.get("mfa_weight", 0)), 4),
+                    "pdi": round(_safe_float(row.get("pdi_weight", 0)), 4),
+                    "cmc": round(_safe_float(row.get("cmc_weight", 0)), 4),
+                },
+                "contrib": {
+                    "mfi": round(_safe_float(row.get("mfi_contrib", 0)), 4),
+                    "mfa": round(_safe_float(row.get("mfa_contrib", 0)), 4),
+                    "pdi": round(_safe_float(row.get("pdi_contrib", 0)), 4),
+                    "cmc": round(_safe_float(row.get("cmc_contrib", 0)), 4),
+                },
+            })
+
+        return details
+
+    def _build_sector_details(self, ranked: pd.DataFrame, target_weights: Dict[str, float]) -> List[Dict]:
+        if ranked is None or ranked.empty:
+            return []
+
+        details = []
+        for _, row in ranked.head(12).iterrows():
+            code = str(row.get("code", ""))
+            details.append({
+                "code": code,
+                "name": row.get("name", ""),
+                "category": row.get("category", ""),
+                "rank": int(_safe_float(row.get("rank", 0))),
+                "signal": row.get("signal", ""),
+                "score": round(_safe_float(row.get("score", 0)), 4),
+                "target_weight": round(_safe_float(target_weights.get(code, 0.0)), 4),
+                "overheat": bool(row.get("overheat", False)),
+                "factors": {
+                    "fund_flow_z": round(_safe_float(row.get("sector_flow_z", 0)), 4),
+                    "flow_acceleration_z": round(_safe_float(row.get("accel_z", 0)), 4),
+                    "intraday_premium_z": round(_safe_float(row.get("premium_z", 0)), 4),
+                    "relative_momentum": round(_safe_float(row.get("rel_momentum", 0)), 4),
+                    "relative_momentum_z": round(_safe_float(row.get("rel_momentum_z", 0)), 4),
+                    "valuation_z": round(_safe_float(row.get("valuation_z", 0)), 4),
+                },
+                "weights": {
+                    "fund_flow": round(_safe_float(row.get("fund_flow_weight", 0)), 4),
+                    "flow_acceleration": round(_safe_float(row.get("flow_acceleration_weight", 0)), 4),
+                    "intraday_premium": round(_safe_float(row.get("intraday_premium_weight", 0)), 4),
+                    "relative_momentum": round(_safe_float(row.get("relative_momentum_weight", 0)), 4),
+                    "valuation": round(_safe_float(row.get("valuation_weight", 0)), 4),
+                },
+                "contrib": {
+                    "fund_flow": round(_safe_float(row.get("fund_flow_contrib", 0)), 4),
+                    "flow_acceleration": round(_safe_float(row.get("flow_acceleration_contrib", 0)), 4),
+                    "intraday_premium": round(_safe_float(row.get("intraday_premium_contrib", 0)), 4),
+                    "relative_momentum": round(_safe_float(row.get("relative_momentum_contrib", 0)), 4),
+                    "valuation": round(_safe_float(row.get("valuation_contrib", 0)), 4),
+                },
+            })
+
+        return details
 
     def _build_daily_snapshot(self, date: pd.Timestamp,
                               market_data: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
@@ -153,6 +259,14 @@ class SignalGenerator:
             self.sector_meta.rename(columns={"code": "code"}),
             on="code", how="left", suffixes=("", "_sector")
         )
+
+        # 字段统一（避免宽基与行业元数据合并后出现name为空）
+        if "name_sector" in snapshot.columns:
+            snapshot["name"] = snapshot["name"].fillna(snapshot["name_sector"])
+        if "category_sector" in snapshot.columns and "category" in snapshot.columns:
+            snapshot["category"] = snapshot["category"].fillna(snapshot["category_sector"])
+        if "style_broad" in snapshot.columns and "style" in snapshot.columns:
+            snapshot["style"] = snapshot["style"].fillna(snapshot["style_broad"])
 
         # 分组
         broad_snapshot = snapshot[snapshot["code"].isin(self.broad_codes)].copy()
