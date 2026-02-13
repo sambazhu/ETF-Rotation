@@ -1,64 +1,160 @@
 #!/usr/bin/env python3
-"""Tushare API文档爬虫。
+"""Tushare API文档爬虫 - 完整版
 
-将Tushare官方文档爬取并保存为Markdown格式。
+扫描所有doc_id，整理成单个MD文档，方便大模型查询。
 """
 
 import sys
 import os
 import time
+import json
 import re
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 import requests
 from bs4 import BeautifulSoup
 
-# 输出目录
-OUTPUT_DIR = Path(__file__).parent / "APIDOC"
-OUTPUT_DIR.mkdir(exist_ok=True)
+# 输出文件
+OUTPUT_FILE = Path(__file__).parent / "APIDOC" / "tushare_api_reference.md"
 
 # Tushare文档基础URL
 BASE_URL = "https://tushare.pro/document/2"
 
-# 需要爬取的API文档ID映射（基于实际页面结构）
-# ETF相关API
-ETF_API_DOCS = {
+# 分类映射 - 基于导航结构
+CATEGORY_MAPPING = {
+    # 股票数据-基础数据
+    "股票列表": "股票数据/基础数据",
+    "每日股本": "股票数据/基础数据",
+    "交易日历": "股票数据/基础数据",
+    "ST股票": "股票数据/基础数据",
+    "沪深港通股票": "股票数据/基础数据",
+    "股票曾用名": "股票数据/基础数据",
+    "上市公司": "股票数据/基础数据",
+    "管理层": "股票数据/基础数据",
+    "北交所": "股票数据/基础数据",
+    "IPO": "股票数据/基础数据",
+    "股票历史": "股票数据/基础数据",
+
+    # 股票数据-行情数据
+    "日线行情": "股票数据/行情数据",
+    "日线": "股票数据/行情数据",
+    "分钟": "股票数据/行情数据",
+    "周线": "股票数据/行情数据",
+    "月线": "股票数据/行情数据",
+    "复权": "股票数据/行情数据",
+    "Tick": "股票数据/行情数据",
+    "成交": "股票数据/行情数据",
+    "每日指标": "股票数据/行情数据",
+    "通用行情": "股票数据/行情数据",
+    "涨跌停": "股票数据/行情数据",
+    "停复牌": "股票数据/行情数据",
+    "十大成交": "股票数据/行情数据",
+    "成交统计": "股票数据/行情数据",
+
+    # 股票数据-财务数据
+    "利润表": "股票数据/财务数据",
+    "资产负债": "股票数据/财务数据",
+    "现金流量": "股票数据/财务数据",
+    "业绩": "股票数据/财务数据",
+    "分红": "股票数据/财务数据",
+    "财务指标": "股票数据/财务数据",
+    "审计": "股票数据/财务数据",
+    "主营": "股票数据/财务数据",
+    "财报": "股票数据/财务数据",
+
+    # 股票数据-参考数据
+    "股东": "股票数据/参考数据",
+    "质押": "股票数据/参考数据",
+    "回购": "股票数据/参考数据",
+    "解禁": "股票数据/参考数据",
+    "大宗交易": "股票数据/参考数据",
+    "开户": "股票数据/参考数据",
+
+    # 股票数据-特色数据
+    "盈利预测": "股票数据/特色数据",
+    "筹码": "股票数据/特色数据",
+    "技术面因子": "股票数据/特色数据",
+    "结算": "股票数据/特色数据",
+    "持股": "股票数据/特色数据",
+    "竞价": "股票数据/特色数据",
+    "九转": "股票数据/特色数据",
+    "AH股": "股票数据/特色数据",
+    "调研": "股票数据/特色数据",
+    "金股": "股票数据/特色数据",
+
+    # 股票数据-两融
+    "融资融券": "股票数据/两融",
+    "转融": "股票数据/两融",
+    "借券": "股票数据/两融",
+
+    # 股票数据-资金流向
+    "资金流向": "股票数据/资金流向",
+
+    # 股票数据-打板
+    "龙虎榜": "股票数据/打板专题",
+    "涨停": "股票数据/打板专题",
+    "板块": "股票数据/打板专题",
+    "游资": "股票数据/打板专题",
+    "热榜": "股票数据/打板专题",
+    "通达信": "股票数据/打板专题",
+    "题材": "股票数据/打板专题",
+    "异动": "股票数据/打板专题",
+
     # ETF专题
-    "fund_basic": {"doc_id": 407, "title": "ETF基本信息", "category": "ETF专题"},
-    "fund_daily": {"doc_id": 408, "title": "ETF日线行情", "category": "ETF专题"},
-    "fund_share": {"doc_id": 409, "title": "ETF份额规模", "category": "ETF专题"},
-    "fund_adj": {"doc_id": 410, "title": "ETF复权因子", "category": "ETF专题"},
-    "fund_min_real": {"doc_id": 411, "title": "ETF实时分钟", "category": "ETF专题"},
-    "fund_min_his": {"doc_id": 412, "title": "ETF历史分钟", "category": "ETF专题"},
-    "fund_daily_real": {"doc_id": 413, "title": "ETF实时日线", "category": "ETF专题"},
-    "fund_index": {"doc_id": 414, "title": "ETF基准指数", "category": "ETF专题"},
+    "ETF": "ETF专题",
 
-    # 公募基金相关
-    "fund_nav": {"doc_id": 420, "title": "基金净值", "category": "公募基金"},
-    "fund_list": {"doc_id": 421, "title": "基金列表", "category": "公募基金"},
-    "fund_manager": {"doc_id": 422, "title": "基金管理人", "category": "公募基金"},
-    "fund_portfolio": {"doc_id": 425, "title": "基金持仓", "category": "公募基金"},
-    "fund_dividend": {"doc_id": 424, "title": "基金分红", "category": "公募基金"},
-    "fund_scale": {"doc_id": 423, "title": "基金规模", "category": "公募基金"},
-}
+    # 指数专题
+    "指数": "指数专题",
+    "申万": "指数专题",
+    "中信": "指数专题",
 
-# 通用股票API
-STOCK_API_DOCS = {
-    "stock_basic": {"doc_id": 25, "title": "股票列表", "category": "股票基础"},
-    "daily": {"doc_id": 27, "title": "日线行情", "category": "股票行情"},
-    "daily_basic": {"doc_id": 32, "title": "每日指标", "category": "股票行情"},
-    "trade_cal": {"doc_id": 29, "title": "交易日历", "category": "股票基础"},
-    "stk_factor": {"doc_id": 161, "title": "股票技术面因子", "category": "特色数据"},
-}
+    # 公募基金
+    "基金": "公募基金",
 
-# 指数相关API
-INDEX_API_DOCS = {
-    "index_basic": {"doc_id": 317, "title": "指数基本信息", "category": "指数专题"},
-    "index_daily": {"doc_id": 318, "title": "指数日线行情", "category": "指数专题"},
-    "index_weight": {"doc_id": 321, "title": "指数成分和权重", "category": "指数专题"},
-    "index_classify": {"doc_id": 322, "title": "申万行业分类", "category": "指数专题"},
+    # 期货
+    "期货": "期货数据",
+    "合约": "期货数据",
+    "仓单": "期货数据",
+    "持仓排名": "期货数据",
+    "南华": "期货数据",
+    "主力": "期货数据",
+
+    # 现货
+    "黄金": "现货数据",
+
+    # 期权
+    "期权": "期权数据",
+
+    # 债券
+    "可转债": "债券专题",
+    "债券": "债券专题",
+    "国债": "债券专题",
+
+    # 外汇
+    "外汇": "外汇数据",
+
+    # 港股
+    "港股": "港股数据",
+
+    # 美股
+    "美股": "美股数据",
+
+    # 宏观
+    "GDP": "宏观经济",
+    "CPI": "宏观经济",
+    "PPI": "宏观经济",
+    "PMI": "宏观经济",
+    "利率": "宏观经济",
+    "货币": "宏观经济",
+    "社融": "宏观经济",
+
+    # 其他
+    "电影": "行业经济",
+    "电视剧": "行业经济",
 }
 
 # 请求头
@@ -70,86 +166,120 @@ HEADERS = {
 }
 
 
-def fetch_doc_content(doc_id: int) -> str:
-    """获取文档页面HTML内容。"""
+def categorize_by_title(title: str) -> str:
+    """根据标题推断分类。"""
+    for keyword, category in CATEGORY_MAPPING.items():
+        if keyword in title:
+            return category
+    return "其他"
+
+
+def fetch_page(doc_id: int) -> Tuple[int, Optional[str], Optional[str]]:
+    """获取单个页面内容。"""
     url = f"{BASE_URL}?doc_id={doc_id}"
-    print(f"  Fetching: {url}")
-
     try:
-        response = requests.get(url, headers=HEADERS, timeout=30)
+        response = requests.get(url, headers=HEADERS, timeout=15)
         response.encoding = 'utf-8'
-        return response.text
+        html = response.text
+
+        # 解析HTML
+        soup = BeautifulSoup(html, 'html.parser')
+
+        # 查找内容区域
+        content_div = soup.find('div', class_='tui-editor-contents')
+        if not content_div:
+            content_div = soup.find('div', {'id': 'content'})
+        if not content_div:
+            content_div = soup.find('article')
+
+        if not content_div:
+            return doc_id, None, None
+
+        # 提取标题
+        title = None
+        for tag in ['h1', 'h2', 'h3']:
+            h = content_div.find(tag)
+            if h:
+                title = h.get_text(strip=True)
+                break
+
+        if not title:
+            # 尝试从其他地方获取标题
+            title_tag = soup.find('title')
+            if title_tag:
+                title = title_tag.get_text(strip=True).replace(' - Tushare', '')
+
+        if not title:
+            return doc_id, None, None
+
+        # 检查是否是有效的API文档页面
+        text = content_div.get_text()
+        if len(text) < 200:
+            return doc_id, None, None
+
+        # 检查是否包含API相关关键词
+        api_keywords = ['接口', '参数', '输出', '示例', 'ts_code', 'pro.', '描述']
+        if not any(kw in text for kw in api_keywords):
+            return doc_id, None, None
+
+        # 转换为Markdown
+        md_content = html_to_markdown(content_div, title)
+        return doc_id, title, md_content
+
     except Exception as e:
-        print(f"  [Error] Failed to fetch doc_id={doc_id}: {e}")
-        return ""
+        print(f"  [Error] doc_id={doc_id}: {e}")
+        return doc_id, None, None
 
 
-def parse_html_to_markdown(html: str, title: str, category: str) -> str:
-    """将HTML内容解析为Markdown格式。"""
-    soup = BeautifulSoup(html, 'html.parser')
+def html_to_markdown(content_div, title: str) -> str:
+    """将HTML内容转换为Markdown。"""
+    md_lines = [f"## {title}\n"]
 
-    # 查找文档内容区域
-    content_div = soup.find('div', class_='tui-editor-contents')
-    if not content_div:
-        content_div = soup.find('div', {'id': 'content'})
-    if not content_div:
-        content_div = soup.find('article')
-    if not content_div:
-        content_div = soup.find('div', class_='content')
-
-    if not content_div:
-        return ""
-
-    # 转换为Markdown
-    md_content = []
-
-    # 标题
-    md_content.append(f"# {title}\n")
-    md_content.append(f"> 分类: {category}\n")
-    md_content.append(f"> 来源: Tushare Pro 文档\n\n")
-    md_content.append("---\n\n")
-
-    # 遍历内容
-    for element in content_div.find_all(['h1', 'h2', 'h3', 'h4', 'p', 'table', 'pre', 'ul', 'ol', 'blockquote']):
-        if element.name in ['h1', 'h2', 'h3', 'h4']:
+    for element in content_div.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'p', 'table', 'pre', 'ul', 'ol', 'blockquote']):
+        if element.name in ['h1', 'h2', 'h3', 'h4', 'h5']:
             level = int(element.name[1])
             text = element.get_text(strip=True)
-            md_content.append(f"\n{'#' * level} {text}\n")
+            if text and text != title:  # 避免重复标题
+                md_lines.append(f"\n{'#' * level} {text}\n")
 
         elif element.name == 'p':
             text = process_inline_elements(element)
             if text.strip():
-                md_content.append(f"\n{text}\n")
+                md_lines.append(f"\n{text}\n")
 
         elif element.name == 'pre':
             code = element.get_text()
-            md_content.append(f"\n```\n{code}\n```\n")
+            if code.strip():
+                md_lines.append(f"\n```\n{code.strip()}\n```\n")
 
         elif element.name == 'table':
             md_table = convert_table_to_markdown(element)
-            md_content.append(f"\n{md_table}\n")
+            if md_table:
+                md_lines.append(f"\n{md_table}\n")
 
         elif element.name == 'ul':
             for li in element.find_all('li', recursive=False):
                 text = li.get_text(strip=True)
-                md_content.append(f"- {text}")
+                if text:
+                    md_lines.append(f"- {text}")
 
         elif element.name == 'ol':
             for i, li in enumerate(element.find_all('li', recursive=False), 1):
                 text = li.get_text(strip=True)
-                md_content.append(f"{i}. {text}")
+                if text:
+                    md_lines.append(f"{i}. {text}")
 
         elif element.name == 'blockquote':
             text = element.get_text(strip=True)
-            md_content.append(f"\n> {text}\n")
+            if text:
+                md_lines.append(f"\n> {text}\n")
 
-    return '\n'.join(md_content)
+    return '\n'.join(md_lines)
 
 
 def process_inline_elements(element) -> str:
-    """处理行内元素（链接、代码、加粗等）。"""
+    """处理行内元素。"""
     text_parts = []
-
     for child in element.children:
         if isinstance(child, str):
             text_parts.append(child)
@@ -167,7 +297,6 @@ def process_inline_elements(element) -> str:
             text_parts.append('\n')
         else:
             text_parts.append(child.get_text())
-
     return ''.join(text_parts)
 
 
@@ -177,9 +306,7 @@ def convert_table_to_markdown(table) -> str:
     for tr in table.find_all('tr'):
         cells = []
         for cell in tr.find_all(['th', 'td']):
-            cell_text = cell.get_text(strip=True)
-            # 处理单元格内的换行
-            cell_text = cell_text.replace('\n', ' ')
+            cell_text = cell.get_text(strip=True).replace('\n', ' ')
             cells.append(cell_text)
         if cells:
             rows.append(cells)
@@ -187,10 +314,7 @@ def convert_table_to_markdown(table) -> str:
     if not rows:
         return ""
 
-    # 确定列数
     max_cols = max(len(row) for row in rows)
-
-    # 构建Markdown表格
     md_lines = []
 
     # 表头
@@ -198,8 +322,6 @@ def convert_table_to_markdown(table) -> str:
     while len(header) < max_cols:
         header.append('')
     md_lines.append('| ' + ' | '.join(header) + ' |')
-
-    # 分隔线
     md_lines.append('| ' + ' | '.join(['---'] * max_cols) + ' |')
 
     # 数据行
@@ -211,113 +333,108 @@ def convert_table_to_markdown(table) -> str:
     return '\n'.join(md_lines)
 
 
-def crawl_api_doc(api_name: str, doc_info: dict) -> bool:
-    """爬取单个API文档。"""
-    doc_id = doc_info["doc_id"]
-    title = doc_info["title"]
-    category = doc_info["category"]
+def scan_doc_ids(start: int = 1, end: int = 500, workers: int = 5) -> Dict[str, Tuple[str, str]]:
+    """扫描doc_id范围，收集有效页面。"""
+    print(f"扫描 doc_id 范围: {start} - {end}")
+    print("=" * 60)
 
-    print(f"\n[{api_name}] {title} (doc_id={doc_id})")
+    results = {}
 
-    # 获取HTML
-    html = fetch_doc_content(doc_id)
-    if not html:
-        print(f"  [Skip] No content fetched")
-        return False
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(fetch_page, doc_id): doc_id for doc_id in range(start, end + 1)}
 
-    # 解析为Markdown
-    md_content = parse_html_to_markdown(html, title, category)
-    if not md_content or len(md_content) < 100:
-        print(f"  [Skip] Content too short or parsing failed")
-        return False
+        completed = 0
+        for future in as_completed(futures):
+            doc_id, title, content = future.result()
+            completed += 1
 
-    # 保存文件
-    category_dir = OUTPUT_DIR / category
-    category_dir.mkdir(exist_ok=True)
+            if title and content:
+                category = categorize_by_title(title)
+                results[title] = (category, content)
+                print(f"  [{completed}/{end-start+1}] doc_id={doc_id}: {title} -> {category}")
+            else:
+                if completed % 50 == 0:
+                    print(f"  [{completed}/{end-start+1}] 已扫描...")
 
-    filename = f"{api_name}.md"
-    filepath = category_dir / filename
+            # 礼貌延迟
+            time.sleep(0.1)
 
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.write(md_content)
-
-    print(f"  [OK] Saved to {filepath.relative_to(OUTPUT_DIR)}")
-    return True
+    return results
 
 
-def create_index_file():
-    """创建文档索引文件。"""
-    index_content = """# Tushare API 文档索引
+def generate_markdown_doc(results: Dict[str, Tuple[str, str]], output_file: Path):
+    """生成单个Markdown文档。"""
+    print(f"\n生成文档: {output_file}")
 
-> 本文档由爬虫自动生成，来源：https://tushare.pro/document/2
+    # 按分类组织
+    categorized = {}
+    for title, (category, content) in results.items():
+        if category not in categorized:
+            categorized[category] = []
+        categorized[category].append((title, content))
 
-## 目录
+    # 生成文档
+    doc_lines = [
+        "# Tushare API 完整参考文档",
+        "",
+        "> 本文档由爬虫自动生成",
+        "> 来源: https://tushare.pro/document/2",
+        "> 生成时间: " + time.strftime("%Y-%m-%d %H:%M:%S"),
+        "",
+        "---",
+        "",
+        "## 目录",
+        "",
+    ]
 
-"""
+    # 添加目录
+    for category in sorted(categorized.keys()):
+        count = len(categorized[category])
+        anchor = category.replace('/', '_').replace(' ', '_')
+        doc_lines.append(f"- [{category}](#{anchor}) ({count}个接口)")
 
-    # 遍历目录结构
-    categories = {}
-    for md_file in OUTPUT_DIR.rglob("*.md"):
-        if md_file.name == "index.md":
-            continue
-        category = md_file.parent.name
-        if category not in categories:
-            categories[category] = []
-        categories[category].append(md_file)
+    doc_lines.append("")
+    doc_lines.append("---")
+    doc_lines.append("")
 
-    # 生成索引
-    for category in sorted(categories.keys()):
-        index_content += f"\n### {category}\n\n"
-        for md_file in sorted(categories[category]):
-            rel_path = md_file.relative_to(OUTPUT_DIR)
-            # 读取文件标题
-            with open(md_file, 'r', encoding='utf-8') as f:
-                first_line = f.readline()
-                title = first_line.replace('#', '').strip() if first_line.startswith('#') else md_file.stem
-            index_content += f"- [{title}]({rel_path})\n"
+    # 添加各分类内容
+    for category in sorted(categorized.keys()):
+        anchor = category.replace('/', '_').replace(' ', '_')
+        doc_lines.append(f"<a id=\"{anchor}\"></a>")
+        doc_lines.append(f"## {category}")
+        doc_lines.append("")
+        doc_lines.append("---")
+        doc_lines.append("")
 
-    # 保存索引
-    index_path = OUTPUT_DIR / "index.md"
-    with open(index_path, 'w', encoding='utf-8') as f:
-        f.write(index_content)
+        for title, content in sorted(categorized[category]):
+            doc_lines.append(content)
+            doc_lines.append("")
+            doc_lines.append("---")
+            doc_lines.append("")
 
-    print(f"\n[Index] Created {index_path}")
+    # 写入文件
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(doc_lines))
+
+    print(f"文档已生成: {output_file}")
+    print(f"共收录 {len(results)} 个API接口")
 
 
 def main():
     print("=" * 60)
-    print("  Tushare API 文档爬虫")
+    print("  Tushare API 文档爬虫 - 完整版")
     print("=" * 60)
 
-    # 合并所有需要爬取的文档
-    all_docs = {}
-    all_docs.update(ETF_API_DOCS)
-    all_docs.update(STOCK_API_DOCS)
-    all_docs.update(INDEX_API_DOCS)
+    # 扫描doc_id范围
+    # Tushare的doc_id大概在1-500范围内
+    results = scan_doc_ids(start=1, end=500, workers=5)
 
-    print(f"\n待爬取文档数量: {len(all_docs)}")
-
-    success_count = 0
-    fail_count = 0
-
-    for api_name, doc_info in all_docs.items():
-        try:
-            if crawl_api_doc(api_name, doc_info):
-                success_count += 1
-            else:
-                fail_count += 1
-            # 礼貌延迟
-            time.sleep(1)
-        except Exception as e:
-            print(f"  [Error] {e}")
-            fail_count += 1
-
-    # 创建索引
-    create_index_file()
+    # 生成单个Markdown文档
+    generate_markdown_doc(results, OUTPUT_FILE)
 
     print("\n" + "=" * 60)
-    print(f"  爬取完成: 成功 {success_count}, 失败 {fail_count}")
-    print(f"  文档目录: {OUTPUT_DIR}")
+    print("  爬取完成!")
     print("=" * 60)
 
 
