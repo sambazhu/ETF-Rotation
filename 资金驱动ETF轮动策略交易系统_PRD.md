@@ -1,9 +1,9 @@
 # 资金驱动ETF轮动策略交易系统 - 产品需求文档
 
-**文档版本**：v2.0
+**文档版本**：v2.1
 **创建日期**：2026-02-06
-**最后更新**：2026-02-10
-**策略类型**：三层量化轮动（宏观→宽基→行业）
+**最后更新**：2026-02-14
+**策略类型**：三层量化轮动（宏观→宽基→行业）+ 风格自适应 + 动态择时
 **目标用户**：个人投资者、量化爱好者
 
 ---
@@ -51,17 +51,53 @@
 
 ## 二、策略逻辑
 
-### 2.1 驱动因子权重
+### 2.1 驱动因子权重（动态调整机制 v2.1）
 
-| 因子 | 权重 | 说明 |
-|------|------|------|
-| **资金流（份额变动）** | 35%-40% | 机构资金的T-1真实流向 |
-| **资金流加速度** | 10%-15% | 资金流的二阶导数，捕捉流入/流出拐点 |
-| **盘中溢价代理** | 5%-10% | ETF盘中溢价率日内变化，T+0获取，弥补份额数据滞后 |
-| **折溢价行为** | 15%-20% | 一二级市场定价偏差的量化反映 |
-| **动量/估值** | 15%-20% | 趋势确认与风险控制 |
+#### 2.1.1 基础权重配置
 
-> **资金流分级原则**：区分"持续小幅流入"（机构建仓信号，权重高）与"短期大额流入"（事件驱动，权重低），前者对后续收益的预测力更强。
+| 因子 | 默认权重 | 权重范围 | 说明 |
+|------|----------|----------|------|
+| **资金流（份额变动）** | 35%-40% | 30%-50% | 机构资金的T-1真实流向 |
+| **资金流加速度** | 10%-15% | 5%-20% | 资金流的二阶导数，捕捉流入/流出拐点 |
+| **盘中溢价代理** | 5%-10% | 0%-15% | ETF盘中溢价率日内变化，T+0获取 |
+| **折溢价行为** | 15%-20% | 10%-25% | 一二级市场定价偏差的量化反映 |
+| **动量/估值** | 15%-20% | 10%-35% | 趋势确认与风险控制，趋势市可提高 |
+
+#### 2.1.2 市场环境自适应权重调整（新增 v2.1）
+
+根据市场风格和环境动态调整因子权重：
+
+```python
+# 动态权重调整规则
+DYNAMIC_WEIGHT_CONFIG = {
+    # ─── 基于市场风格的调整 ───
+    'large_cap_dominant': {       # 大盘主导市场
+        'momentum': 1.5,          # 动量权重提升50%
+        'fund_flow': 0.8,         # 资金流权重降低
+        'valuation': 1.2,         # 估值权重提升
+    },
+    'small_cap_dominant': {       # 小盘主导市场
+        'momentum': 1.3,          # 动量权重提升30%
+        'fund_flow': 1.2,         # 资金流权重提升
+        'flow_acceleration': 1.3, # 加速度权重提升
+    },
+    'trending_market': {          # 趋势明确市场
+        'momentum': 1.5,          # 动量权重提升50%
+        'fund_flow': 1.1,         # 资金流略提升
+        'intraday_premium': 0.7,  # 盘中溢价权重降低
+    },
+    'choppy_market': {            # 震荡市场
+        'momentum': 0.6,          # 动量权重降低（假信号多）
+        'fund_flow': 1.2,         # 资金流权重提升
+        'flow_acceleration': 1.2, # 加速度权重提升
+        'valuation': 1.3,         # 估值权重提升
+    },
+}
+```
+
+#### 2.1.3 资金流分级原则
+
+区分"持续小幅流入"（机构建仓信号，权重高）与"短期大额流入"（事件驱动，权重低），前者对后续收益的预测力更强。
 
 #### 资金流加速度计算
 
@@ -203,6 +239,88 @@ score = (MFI_z * 0.40 + MFA_z * 0.15 + (-PDI_z) * 0.25 + CMC_z * 0.20) * SCALE_F
 - `20-40`：该风格为次配（30%左右）
 - `<0`：不配置
 
+---
+
+#### 第二层（扩展）：市场风格判断（新增 v2.1）
+
+**目标**：识别当前市场是大盘主导还是小盘主导，动态调整宽基/行业配置比例
+
+**风格判断指标**：
+
+| 指标 | 计算方法 | 阈值 | 说明 |
+|------|----------|------|------|
+| 大盘/小盘收益差 | 沪深300 - 中证1000 近20日收益差 | >3%：大盘主导；<-3%：小盘主导 | 核心风格识别指标 |
+| 大盘/小盘资金流比 | 沪深300资金流 / 中证1000资金流 | >1.5：大盘主导；<0.67：小盘主导 | 资金流向确认 |
+| 大小盘波动率比 | 沪深300波动率 / 中证1000波动率 | <0.8：大盘稳定；>1.2：小盘活跃 | 风险偏好判断 |
+| 风格动量持续性 | 收益差近5日标准差 | <2%：风格稳定；>4%：风格轮动快 | 避免频繁切换 |
+
+**风格判断逻辑**：
+
+```python
+def detect_market_style(date, lookback=20):
+    """判断当前市场风格（大盘/小盘主导）
+
+    Returns:
+        dict: {
+            'style': 'large_cap' | 'small_cap' | 'neutral',
+            'confidence': 0.0-1.0,  # 判断置信度
+            'allocation_adjustment': {...}  # 配置调整建议
+        }
+    """
+    # 1. 计算收益差
+    large_return = get_index_return('000300', date, lookback)
+    small_return = get_index_return('000852', date, lookback)
+    return_diff = large_return - small_return
+
+    # 2. 计算资金流比
+    large_flow = get_etf_flow('510300', date, lookback)
+    small_flow = get_etf_flow('512100', date, lookback)
+    flow_ratio = large_flow / small_flow if small_flow != 0 else 1.0
+
+    # 3. 风格判断
+    if return_diff > 0.03 and flow_ratio > 1.2:
+        style = 'large_cap'
+        confidence = min(1.0, (return_diff - 0.03) / 0.05 + (flow_ratio - 1.2) / 0.8)
+    elif return_diff < -0.03 and flow_ratio < 0.8:
+        style = 'small_cap'
+        confidence = min(1.0, (-return_diff - 0.03) / 0.05 + (0.8 - flow_ratio) / 0.4)
+    else:
+        style = 'neutral'
+        confidence = 0.5
+
+    return {'style': style, 'confidence': confidence}
+```
+
+**风格切换缓冲机制**：
+
+```python
+class StyleRegimeFilter:
+    """风格切换过滤器"""
+
+    def __init__(self):
+        self.current_style = 'neutral'
+        self.style_counter = 0
+        self.style_confirm_threshold = 3  # 连续3次确认才切换
+        self.min_hold_days = 10
+
+    def update(self, date, detected_style):
+        if self.last_switch_date and (date - self.last_switch_date).days < self.min_hold_days:
+            return self.current_style
+
+        if detected_style == self.current_style:
+            self.style_counter = 0
+            return self.current_style
+        else:
+            self.style_counter += 1
+            if self.style_counter >= self.style_confirm_threshold:
+                self.current_style = detected_style
+                self.style_counter = 0
+                self.last_switch_date = date
+            return self.current_style
+```
+
+---
+
 #### 第三层：行业轮动指标
 
 **行业池（20只）**：
@@ -263,9 +381,318 @@ if calc_return(code, days=10) > 0.15:  # 近10日涨幅超15%
 - `40-60`：该行业为辅助配置（单行业≤15%）
 - `<20`：回避
 
+### 2.4 风格判断模块（新增 v2.1）
+
+**目标**：识别当前市场处于大盘主导还是小盘主导，动态调整宽基池权重。
+
+#### 2.4.1 风格判断指标
+
+| 指标 | 计算方式 | 权重 |
+|------|----------|------|
+| 大盘-小盘收益差 | 沪深300近20日收益 - 中证1000近20日收益 | 40% |
+| 大盘-小盘资金流差 | 沪深300ETF近5日净流入 - 中证1000ETF近5日净流入 | 35% |
+| 大盘-小盘动量差 | 沪深300 20日动量 - 中证1000 20日动量 | 25% |
+
+#### 2.4.2 风格评分计算
+
+```python
+def calculate_style_score(date):
+    """计算市场风格偏向分数
+    Returns:
+        score: 正数=大盘主导，负数=小盘主导，0=均衡
+        strength: 风格强度 (0-1)
+    """
+    # 1. 收益差标准化
+    large_cap_return = calc_return('510300', days=20)
+    small_cap_return = calc_return('512100', days=20)
+    return_diff = large_cap_return - small_cap_return
+    return_diff_z = standardize(return_diff_series)[date]
+
+    # 2. 资金流差标准化
+    large_flow = calc_net_inflow('510300', days=5)
+    small_flow = calc_net_inflow('512100', days=5)
+    flow_diff = large_flow - small_flow
+    flow_diff_z = standardize(flow_diff_series)[date]
+
+    # 3. 动量差标准化
+    large_momentum = calc_momentum('510300', days=20)
+    small_momentum = calc_momentum('512100', days=20)
+    momentum_diff = large_momentum - small_momentum
+    momentum_diff_z = standardize(momentum_diff_series)[date]
+
+    # 加权合成
+    style_score = (return_diff_z * 0.40 +
+                   flow_diff_z * 0.35 +
+                   momentum_diff_z * 0.25) * 33.3
+
+    # 风格强度 (sigmoid映射到0-1)
+    style_strength = 1 / (1 + math.exp(-abs(style_score) / 20))
+
+    return style_score, style_strength
+```
+
+#### 2.4.3 风格影响权重调整
+
+```python
+# 根据风格判断调整宽基评分权重
+STYLE_BIAS_CONFIG = {
+    'large_cap_dominant': {
+        'large_cap_etf_boost': 1.3,      # 大盘ETF评分加权
+        'small_cap_etf_discount': 0.7,   # 小盘ETF评分折扣
+        'min_large_cap_ratio': 0.6,      # 最低大盘配置60%
+    },
+    'small_cap_dominant': {
+        'small_cap_etf_boost': 1.3,      # 小盘ETF评分加权
+        'large_cap_etf_discount': 0.7,   # 大盘ETF评分折扣
+        'min_small_cap_ratio': 0.6,      # 最低小盘配置60%
+    },
+    'balanced': {
+        'boost': 1.0,                    # 无加权
+        'discount': 1.0,
+        'neutral_ratio': 0.5,            # 均衡配置
+    }
+}
+
+# 风格阈值
+if style_score > 30:      # 大盘主导
+    market_style = 'large_cap_dominant'
+elif style_score < -30:  # 小盘主导
+    market_style = 'small_cap_dominant'
+else:                     # 均衡市场
+    market_style = 'balanced'
+```
+
 ---
 
-## 三、交易规则
+### 2.5 动态因子权重系统（新增 v2.1）
+
+**目标**：根据市场环境动态调整各因子权重，避免固定权重在特定市场失效。
+
+#### 2.5.1 市场环境分类
+
+| 市场环境 | 定义条件 | 特征 |
+|----------|----------|------|
+| 趋势市 | 20日波动率 > 历史60分位 且 宏观评分绝对值 > 40 | 趋势明确，动量有效 |
+| 震荡市 | 20日波动率 < 历史40分位 且 宏观评分绝对值 < 20 | 区间波动，均值回复 |
+| 过渡市 | 其他情况 | 不明确，保守配置 |
+
+#### 2.5.2 动态权重配置
+
+```python
+# 宏观层动态权重
+DYNAMIC_MACRO_WEIGHTS = {
+    'trending': {          # 趋势市：动量+资金流权重提高
+        'net_inflow': 0.30,
+        'flow_acceleration': 0.10,
+        'intraday_premium': 0.10,
+        'premium': 0.15,
+        'momentum': 0.35,      # 动量权重提高
+    },
+    'choppy': {            # 震荡市：估值+折溢价权重提高
+        'net_inflow': 0.40,
+        'flow_acceleration': 0.15,
+        'intraday_premium': 0.15,
+        'premium': 0.25,       # 折溢价权重提高
+        'momentum': 0.05,      # 动量权重降低
+    },
+    'transitional': {      # 过渡市：均衡配置
+        'net_inflow': 0.35,
+        'flow_acceleration': 0.15,
+        'intraday_premium': 0.10,
+        'premium': 0.20,
+        'momentum': 0.20,
+    }
+}
+
+# 宽基层动态权重
+DYNAMIC_BROAD_WEIGHTS = {
+    'trending': {
+        'mfi': 0.30,           # 资金流权重降低
+        'mfa': 0.10,
+        'pdi': 0.20,
+        'cmc': 0.40,           # 动量权重提高
+    },
+    'choppy': {
+        'mfi': 0.45,           # 资金流权重提高
+        'mfa': 0.20,
+        'pdi': 0.25,           # 折溢价权重提高
+        'cmc': 0.10,           # 动量权重降低
+    },
+    'transitional': {
+        'mfi': 0.40,
+        'mfa': 0.15,
+        'pdi': 0.25,
+        'cmc': 0.20,
+    }
+}
+
+# 行业层动态权重
+DYNAMIC_SECTOR_WEIGHTS = {
+    'trending': {
+        'fund_flow': 0.30,
+        'flow_acceleration': 0.10,
+        'intraday_premium': 0.10,
+        'relative_momentum': 0.40,  # 动量权重提高
+        'valuation': 0.10,
+    },
+    'choppy': {
+        'fund_flow': 0.45,
+        'flow_acceleration': 0.20,
+        'intraday_premium': 0.15,
+        'relative_momentum': 0.10,  # 动量权重降低
+        'valuation': 0.10,
+    },
+    'transitional': {
+        'fund_flow': 0.40,
+        'flow_acceleration': 0.15,
+        'intraday_premium': 0.10,
+        'relative_momentum': 0.25,
+        'valuation': 0.10,
+    }
+}
+```
+
+---
+
+### 2.6 动态择时机制（新增 v2.1）
+
+**目标**：根据趋势强度动态调整总仓位，趋势明确时重仓，震荡市时轻仓。
+
+#### 2.6.1 趋势强度评估
+
+```python
+def calculate_trend_strength(date):
+    """计算市场趋势强度
+    Returns:
+        strength: 0-1之间的趋势强度值
+        direction: 'up', 'down', 'neutral'
+    """
+    # 多维度趋势确认
+    factors = {
+        'macro_trend': 1 if abs(macro_score) > 40 else 0,
+        'price_trend': 1 if abs(calc_return('510300', days=20)) > 0.05 else 0,
+        'flow_trend': 1 if calc_net_inflow('all', days=5) > 0 else 0,
+        'volatility_low': 1 if calc_volatility('510300', days=20) < 0.20 else 0,
+        'breadth': 1 if calc_market_breadth() > 0.6 else 0,  # 上涨家数占比
+    }
+
+    # 趋势强度 = 确认因子占比
+    trend_strength = sum(factors.values()) / len(factors)
+
+    # 趋势方向
+    if macro_score > 30 and factors['price_trend']:
+        direction = 'up'
+    elif macro_score < -30 and factors['price_trend']:
+        direction = 'down'
+    else:
+        direction = 'neutral'
+
+    return trend_strength, direction
+```
+
+#### 2.6.2 动态仓位调整
+
+```python
+# 基础仓位配置
+BASE_POSITION_CONFIG = {
+    'max_equity_ratio': 1.0,     # 最高权益仓位100%
+    'min_equity_ratio': 0.0,     # 最低权益仓位0%
+    'neutral_ratio': 0.5,        # 中性仓位50%
+}
+
+# 根据趋势强度调整仓位
+def adjust_position_by_trend(macro_score, trend_strength, direction):
+    """动态调整总权益仓位"""
+
+    # 基础仓位由宏观评分决定（sigmoid平滑）
+    base_ratio = 1 / (1 + math.exp(-macro_score / 15))
+
+    # 根据趋势强度调整
+    if direction == 'up' and trend_strength > 0.6:
+        # 强上升趋势：提高仓位上限
+        adjusted_ratio = min(base_ratio * 1.2, 1.0)
+    elif direction == 'down' and trend_strength > 0.6:
+        # 强下降趋势：降低仓位下限
+        adjusted_ratio = base_ratio * 0.5
+    elif trend_strength < 0.3:
+        # 弱趋势/震荡市：降低仓位至中性附近
+        adjusted_ratio = 0.3 + (base_ratio - 0.5) * 0.4  # 压缩波动
+    else:
+        adjusted_ratio = base_ratio
+
+    return adjusted_ratio
+
+# 分层仓位动态调整
+def get_layer_allocation(trend_strength, market_style):
+    """根据趋势强度和市场风格调整分层仓位配比"""
+
+    if trend_strength > 0.7:  # 强趋势
+        if market_style == 'large_cap_dominant':
+            return {'broad_based': 0.7, 'sector': 0.3}  # 重仓宽基
+        else:
+            return {'broad_based': 0.4, 'sector': 0.6}  # 重仓行业
+    elif trend_strength < 0.3:  # 弱趋势/震荡
+        return {'broad_based': 0.6, 'sector': 0.2}      # 降低行业暴露
+    else:  # 中等趋势
+        return {'broad_based': 0.5, 'sector': 0.4}      # 均衡配置
+```
+
+#### 2.6.3 择时与风格结合
+
+```python
+def generate_final_allocation(date):
+    """生成最终仓位配置（结合择时+风格）"""
+
+    # 1. 市场环境判断
+    macro_score = calc_macro_score(date)
+    trend_strength, direction = calculate_trend_strength(date)
+    style_score, style_strength = calculate_style_score(date)
+
+    # 2. 确定市场风格
+    if style_score > 30:
+        market_style = 'large_cap_dominant'
+    elif style_score < -30:
+        market_style = 'small_cap_dominant'
+    else:
+        market_style = 'balanced'
+
+    # 3. 确定市场环境类型
+    volatility = calc_volatility('510300', days=20)
+    if volatility > np.percentile(historical_vol, 60) and abs(macro_score) > 40:
+        market_regime = 'trending'
+    elif volatility < np.percentile(historical_vol, 40) and abs(macro_score) < 20:
+        market_regime = 'choppy'
+    else:
+        market_regime = 'transitional'
+
+    # 4. 计算总权益仓位
+    total_equity = adjust_position_by_trend(macro_score, trend_strength, direction)
+
+    # 5. 计算分层仓位
+    layer_ratio = get_layer_allocation(trend_strength, market_style)
+
+    # 6. 获取动态因子权重
+    macro_weights = DYNAMIC_MACRO_WEIGHTS[market_regime]
+    broad_weights = DYNAMIC_BROAD_WEIGHTS[market_regime]
+    sector_weights = DYNAMIC_SECTOR_WEIGHTS[market_regime]
+
+    # 7. 应用风格调整
+    style_config = STYLE_BIAS_CONFIG[market_style]
+
+    return {
+        'total_equity_ratio': total_equity,
+        'broad_based_ratio': total_equity * layer_ratio['broad_based'],
+        'sector_ratio': total_equity * layer_ratio['sector'],
+        'market_style': market_style,
+        'market_regime': market_regime,
+        'trend_strength': trend_strength,
+        'style_score': style_score,
+        'macro_weights': macro_weights,
+        'broad_weights': broad_weights,
+        'sector_weights': sector_weights,
+        'style_config': style_config,
+    }
+```
 
 ### 3.1 信号生成与调仓频率（分层式）
 
@@ -335,16 +762,164 @@ STOP_LOSS_CONFIG = {
 }
 ```
 
-### 3.5 震荡市识别与应对
+### 3.6 趋势择时与动态仓位管理（新增 v2.1）
+
+**目标**：根据市场趋势强度动态调整总仓位，趋势明确时满仓，震荡/下行时降低仓位
+
+#### 3.6.1 趋势强度判断指标
+
+| 指标 | 计算方法 | 权重 | 说明 |
+|------|----------|------|------|
+| 均线系统排列 | 5/10/20/60日均线多头排列得分 | 30% | 多头排列越完整，趋势越强 |
+| 价格动量 | 当前价 vs 20日均线的偏离度 | 25% | 正向偏离越大，趋势越强 |
+| 波动率趋势 | 20日波动率 / 60日波动率 | 20% | 比率<0.8表示波动收敛，趋势可能形成 |
+| 成交量确认 | 近5日成交量 / 近20日均量 | 15% | 放量上涨确认趋势 |
+| 宏观评分趋势 | 宏观评分5日变化率 | 10% | 宏观环境改善确认 |
+
+#### 3.6.2 趋势强度评分计算
 
 ```python
-# 震荡市识别条件
-if abs(宏观评分) < 10 and 近20日波动率 < 历史25分位数:
-    # 进入震荡市模式：降低调仓频率，提高调仓门槛
-    调仓频率 = '月频'             # 降低到月频
-    MIN_SCORE_CHANGE = 30           # 提高触发门槛
-    行业单品种上限 = 15%          # 降低集中度
-    # 目标：少动多看，避免资金被震荡磨损
+def calculate_trend_strength(date):
+    """计算市场趋势强度得分（0-100）
+
+    Returns:
+        dict: {
+            'score': 0-100,           # 趋势强度得分
+            'regime': 'strong_uptrend' | 'uptrend' | 'sideways' | 'downtrend' | 'strong_downtrend',
+            'recommended_position': 0.0-1.0  # 建议仓位比例
+        }
+    """
+    # 1. 均线系统排列（30%）
+    ma5, ma10, ma20, ma60 = get_moving_averages('000300', date)
+    ma_score = 0
+    if ma5 > ma10: ma_score += 10
+    if ma10 > ma20: ma_score += 10
+    if ma20 > ma60: ma_score += 10
+
+    # 2. 价格动量（25%）
+    price = get_close('000300', date)
+    momentum = (price - ma20) / ma20 * 100
+    momentum_score = max(0, min(25, (momentum + 5) / 10 * 25))
+
+    # 3. 波动率趋势（20%）
+    vol20 = get_volatility('000300', date, 20)
+    vol60 = get_volatility('000300', date, 60)
+    vol_ratio = vol20 / vol60 if vol60 > 0 else 1.0
+    vol_score = max(0, min(20, (1 - vol_ratio) / 0.5 * 20))
+
+    # 4. 成交量确认（15%）
+    vol5 = get_avg_volume('000300', date, 5)
+    vol20 = get_avg_volume('000300', date, 20)
+    volume_ratio = vol5 / vol20 if vol20 > 0 else 1.0
+    volume_score = max(0, min(15, (volume_ratio - 0.8) / 0.6 * 15))
+
+    # 5. 宏观评分趋势（10%）
+    macro_now = get_macro_score(date)
+    macro_5d = get_macro_score(date - 5)
+    macro_change = (macro_now - macro_5d) / abs(macro_5d) if macro_5d != 0 else 0
+    macro_score = max(0, min(10, (macro_change + 0.2) / 0.4 * 10))
+
+    total_score = ma_score + momentum_score + vol_score + volume_score + macro_score
+
+    # 判断市场状态
+    if total_score >= 80:
+        regime = 'strong_uptrend'
+        position = 1.0
+    elif total_score >= 60:
+        regime = 'uptrend'
+        position = 0.8
+    elif total_score >= 40:
+        regime = 'sideways'
+        position = 0.5
+    elif total_score >= 20:
+        regime = 'downtrend'
+        position = 0.3
+    else:
+        regime = 'strong_downtrend'
+        position = 0.0
+
+    return {
+        'score': total_score,
+        'regime': regime,
+        'recommended_position': position,
+        'components': {
+            'ma_score': ma_score,
+            'momentum_score': momentum_score,
+            'vol_score': vol_score,
+            'volume_score': volume_score,
+            'macro_score': macro_score
+        }
+    }
+```
+
+#### 3.6.3 动态仓位管理规则
+
+```python
+def calculate_dynamic_position(macro_score, trend_strength, style_bias):
+    """综合计算动态仓位
+
+    Args:
+        macro_score: 宏观评分 (-100 to +100)
+        trend_strength: 趋势强度 (0 to 100)
+        style_bias: 风格判断结果
+
+    Returns:
+        float: 0.0-1.0 的目标仓位比例
+    """
+    # 1. 基础仓位 = 宏观评分映射
+    base_position = sigmoid(macro_score / 20)  # 归一化到0-1
+
+    # 2. 趋势调整系数
+    trend_multiplier = {
+        'strong_uptrend': 1.2,    # 满仓
+        'uptrend': 1.0,           # 维持基础仓位
+        'sideways': 0.7,          # 降低到70%
+        'downtrend': 0.4,         # 降低到40%
+        'strong_downtrend': 0.0   # 空仓
+    }[trend_strength['regime']]
+
+    # 3. 风格调整（大盘主导时更稳健，可提高仓位）
+    style_multiplier = 1.0
+    if style_bias['style'] == 'large_cap':
+        style_multiplier = 1.1    # 大盘主导，风险较低，可略微提高
+    elif style_bias['style'] == 'small_cap':
+        style_multiplier = 0.9    # 小盘主导，波动大，略微降低
+
+    # 4. 计算最终仓位
+    target_position = base_position * trend_multiplier * style_multiplier
+
+    # 5. 限制在合理范围
+    return max(0.0, min(1.0, target_position))
+```
+
+#### 3.6.4 择时信号与调仓频率协同
+
+```python
+class TimingAdaptiveRebalancer:
+    """择时自适应调仓器"""
+
+    def __init__(self):
+        self.last_rebalance = None
+        self.rebalance_freq = {
+            'strong_uptrend': 5,     # 强趋势：5天（提高敏感度）
+            'uptrend': 10,           # 上升趋势：10天（双周）
+            'sideways': 20,          # 震荡：20天（月频）
+            'downtrend': 30,         # 下行：30天（减少操作）
+            'strong_downtrend': 999  # 空仓：不操作
+        }
+
+    def should_rebalance(self, date, trend_regime, force_signal=False):
+        """判断是否应调仓"""
+        if force_signal:
+            return True
+
+        min_interval = self.rebalance_freq[trend_regime]
+
+        if self.last_rebalance is None:
+            return True
+
+        days_since = (date - self.last_rebalance).days
+        return days_since >= min_interval
 ```
 
 ---
@@ -466,6 +1041,9 @@ ETF_Rotation_Strategy/
 │   ├── macro_signal.py             # 宏观环境判断（第一层）
 │   ├── broad_based_rotation.py     # 宽基轮动（第二层）
 │   ├── sector_rotation.py          # 行业轮动（第三层）
+│   ├── style_detector.py           # 【新增】市场风格判断
+│   ├── timing_model.py             # 【新增】趋势择时模型
+│   ├── dynamic_weights.py          # 【新增】动态因子权重
 │   └── signal_generator.py         # 综合信号生成
 ├── backtest/                        # 回测系统
 │   ├── backtest_engine.py          # 回测引擎
@@ -664,16 +1242,45 @@ class BacktestEngine:
 
 ## 七、实施计划
 
-| 阶段 | 任务 | 预计工作量 |
-|------|------|-----------|
-| **Phase 1** | 数据获取模块开发 | 2-3天 |
-| **Phase 2** | 指标计算模块开发 | 2-3天 |
-| **Phase 3** | 信号生成与仓位管理 | 2-3天 |
-| **Phase 4** | 回测引擎与绩效评估 | 2-3天 |
-| **Phase 5** | 回测优化与参数调优 | 3-5天 |
-| **Phase 6** | 实盘对接（可选） | 2-3天 |
+### Phase 1: 基础框架（已完成）
 
-**总计**：约2-3周（个人开发）
+| 任务 | 状态 | 说明 |
+|------|------|------|
+| 数据获取模块 | ✅ | Tushare Pro 数据源接入 |
+| 三层信号系统 | ✅ | 宏观/宽基/行业轮动 |
+| 回测引擎 | ✅ | 完整回测框架 |
+| 风险控制 | ✅ | 多层止损止盈体系 |
+
+### Phase 2: v2.1 优化迭代（当前）
+
+| 任务 | 预计工作量 | 优先级 |
+|------|-----------|--------|
+| **风格判断模块** | 2天 | P0 |
+| - 大盘/小盘收益差计算 | | |
+| - 资金流比分析 | | |
+| - 风格切换缓冲机制 | | |
+| **动态因子权重** | 1天 | P0 |
+| - 市场环境识别 | | |
+| - 权重调整算法 | | |
+| - 与评分系统集成 | | |
+| **趋势择时模型** | 2天 | P0 |
+| - 均线系统排列 | | |
+| - 趋势强度评分 | | |
+| - 动态仓位管理 | | |
+| **回测验证** | 2天 | P1 |
+| - 参数敏感性测试 | | |
+| - 2022-2025全周期回测 | | |
+| - 对比基准分析 | | |
+
+### Phase 3: 高级优化（可选）
+
+| 任务 | 预计工作量 | 说明 |
+|------|-----------|------|
+| 机器学习增强 | 3-5天 | LSTM/XGBoost预测资金流 |
+| 参数自动优化 | 2-3天 | 遗传算法/贝叶斯优化 |
+| 实盘对接 | 2-3天 | 信号推送、自动交易 |
+
+**总计**：v2.1优化约1周，完整系统约3周
 
 ---
 

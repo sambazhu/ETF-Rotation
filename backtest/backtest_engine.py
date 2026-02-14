@@ -1,7 +1,7 @@
 """回测主引擎（v2.0）。
 
 控制时间推进，将数据层、信号层、组合管理器串联:
-1. 加载数据（缓存优先 → AKShare → Mock）
+1. 加载数据（缓存优先 → Tushare → Mock）
 2. DataProcessor 计算指标和Z-score
 3. 每日推进: 止损检查 → 信号生成 → 判断是否调仓 → 执行交易
 4. 记录每日快照和交易明细
@@ -52,25 +52,15 @@ class BacktestEngine:
                  signal_config: Optional[Dict] = None,
                  risk_config: Optional[Dict] = None,
                  use_mock: bool = False,
-                 data_source: Optional[str] = None,
                  tushare_token: Optional[str] = None):
         self.config = config or BACKTEST_CONFIG
         self.signal_config = signal_config or SIGNAL_CONFIG
         self.risk_config = risk_config or RISK_CONFIG
         self.use_mock = use_mock
 
-        # 确定数据源
-        if use_mock:
-            source = "mock"
-        elif data_source:
-            source = data_source
-        else:
-            source = "akshare"
-
         # 核心组件
         self.data_fetcher = DataFetcher(
-            data_source=source,
-            fallback_to_mock=True,
+            fallback_to_mock=not use_mock,
             tushare_token=tushare_token,
         )
         self.processor = DataProcessor()
@@ -104,7 +94,7 @@ class BacktestEngine:
         print(f"  ETF轮动策略回测")
         print(f"  回测区间: {start} ~ {end}")
         print(f"  初始资金: {self.config.get('initial_capital', 500000):,.0f}")
-        print(f"  数据模式: {'Mock' if self.use_mock else 'AKShare + Cache'}")
+        print(f"  数据模式: {'Mock' if self.use_mock else 'Tushare Pro + Cache'}")
         print(f"{'=' * 60}\n")
 
         # Step 1: 加载数据
@@ -168,36 +158,75 @@ class BacktestEngine:
         }
 
     def _load_data(self, start: str, end: str, progress: bool):
-        """加载并处理所有ETF数据。"""
+        """加载并处理所有ETF数据（修复：先合并份额再处理因子，包含预热期）。"""
         codes = get_all_etf_codes()
         print(f"  Loading {len(codes)} ETFs...")
 
+        # 计算预热期开始日期（用于Z-score计算）
+        # 需要：标准化窗口(60天) + 动量计算(20天) + 缓冲 = 100天
+        start_dt = pd.Timestamp(start)
+        warmup_days = 100
+        warmup_start = (start_dt - pd.Timedelta(days=warmup_days)).strftime("%Y-%m-%d")
+        print(f"  数据预热期: {warmup_start} ~ {start} (确保因子计算准确)")
+
+        # Step 1: 获取原始日线数据（包含预热期）
+        raw_data: Dict[str, pd.DataFrame] = {}
         for i, code in enumerate(codes):
             if progress and i % 5 == 0:
                 pct = (i / len(codes)) * 100
                 print(f"\r  Loading: {pct:.0f}% ({i}/{len(codes)})", end="", flush=True)
 
-            result = self.data_fetcher.fetch_etf_daily(code, start, end)
+            result = self.data_fetcher.fetch_etf_daily(code, warmup_start, end)
             if result.data is not None and not result.data.empty:
-                # 处理指标
-                processed = self.processor.process(result.data)
-                if not processed.empty:
-                    self.market_data[code] = processed
+                raw_data[code] = result.data
 
         if progress:
             print(f"\r  Loading: 100% ({len(codes)}/{len(codes)})")
 
-        # 合并份额数据到日线中
+        # Step 2: 获取并合并份额数据（使用预热期开始日期）
         print(f"\n  合并份额数据...")
-        shares_df = self.data_fetcher.fetch_shares_for_period(start, end, codes)
+        shares_df = self.data_fetcher.fetch_shares_for_period(warmup_start, end, codes)
         if not shares_df.empty:
-            self.market_data = self.data_fetcher.merge_shares_into_daily(
-                self.market_data,
+            raw_data = self.data_fetcher.merge_shares_into_daily(
+                raw_data,
                 shares_df
             )
             print(f"  合并完成: {len(shares_df)} 条份额记录")
         else:
-            print("  [警告] 份额数据为空，跳过合并")
+            print("  [警告] 份额数据为空，净流入因子将失效")
+
+        # Step 2.5: 获取并合并技术因子数据（MACD、均线等）
+        print(f"\n  获取技术因子数据...")
+        tech_df = self.data_fetcher.fetch_tech_factors_for_period(warmup_start, end, codes)
+        if not tech_df.empty:
+            raw_data = self.data_fetcher.merge_tech_factors_into_daily(
+                raw_data,
+                tech_df
+            )
+            print(f"  技术因子数据合并完成")
+        else:
+            print("  [警告] 技术因子数据为空，使用本地计算")
+
+        # Step 2.6: 获取并合并净值数据（用于PDI因子计算）
+        print(f"\n  获取净值数据...")
+        nav_df = self.data_fetcher.fetch_nav_for_period(warmup_start, end, codes)
+        if not nav_df.empty:
+            raw_data = self.data_fetcher.merge_nav_into_daily(
+                raw_data,
+                nav_df
+            )
+            print(f"  净值数据合并完成")
+        else:
+            print("  [警告] 净值数据为空，使用收盘价作为替代")
+
+        # Step 3: 统一处理数据（计算因子和Z-score）
+        print(f"  处理因子数据...")
+        for code, df in raw_data.items():
+            if not df.empty:
+                processed = self.processor.process(df)
+                if not processed.empty:
+                    self.market_data[code] = processed
+        print(f"  处理完成: {len(self.market_data)} 只ETF")
 
     def _build_trading_dates(self, start: str, end: str):
         """从已有数据中提取交易日列表。"""

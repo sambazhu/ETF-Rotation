@@ -1,14 +1,13 @@
-"""AKShare / Tushare 数据源封装及Mock数据生成。
+"""Tushare Pro 数据源封装及Mock数据生成。
 
 所有API调用集中在此模块，上层通过DataFetcher间接使用。
-支持数据源: AKShare(免费) / Tushare Pro(推荐,需token) / Mock
+支持数据源: Tushare Pro(需token) / Mock
 IOPV用基金收盘净值替代。
 """
 
 from __future__ import annotations
 
 import math
-import time
 import logging
 from dataclasses import dataclass
 from typing import Optional, List
@@ -27,284 +26,7 @@ class DataSourceStatus:
 
 
 # ──────────────────────────────────────────────
-# AKShare 探测
-# ──────────────────────────────────────────────
-
-def probe_akshare() -> DataSourceStatus:
-    """探测 akshare 可用性。"""
-    try:
-        import akshare as ak  # type: ignore
-        _ = ak.__version__
-        return DataSourceStatus("akshare", True, f"akshare {ak.__version__} 可用")
-    except Exception as exc:
-        return DataSourceStatus("akshare", False, f"akshare 不可用: {exc}")
-
-
-# ──────────────────────────────────────────────
-# ETF日线行情
-# ──────────────────────────────────────────────
-
-def fetch_etf_daily_akshare(code: str, start_date: str, end_date: str) -> pd.DataFrame:
-    """通过 fund_etf_hist_em 获取ETF日线行情（OHLCV + 成交额）。
-
-    Returns:
-        DataFrame with columns: date, code, open, high, low, close, volume, amount
-    """
-    import akshare as ak  # type: ignore
-
-    df = ak.fund_etf_hist_em(
-        symbol=code,
-        period="daily",
-        start_date=start_date.replace("-", ""),
-        end_date=end_date.replace("-", ""),
-        adjust="",
-    )
-    if df is None or df.empty:
-        logger.warning(f"ETF日线数据为空: {code}")
-        return pd.DataFrame()
-
-    rename_map = {
-        "日期": "date",
-        "开盘": "open",
-        "收盘": "close",
-        "最高": "high",
-        "最低": "low",
-        "成交量": "volume",
-        "成交额": "amount",
-    }
-    mapped = df.rename(columns=rename_map)
-    required = ["date", "open", "high", "low", "close", "volume", "amount"]
-    for col in required:
-        if col not in mapped.columns:
-            mapped[col] = pd.NA
-
-    mapped = mapped[required].copy()
-    mapped["date"] = pd.to_datetime(mapped["date"])
-    mapped["code"] = code
-
-    for col in ["open", "high", "low", "close", "volume", "amount"]:
-        mapped[col] = pd.to_numeric(mapped[col], errors="coerce")
-
-    mapped.sort_values("date", inplace=True)
-    mapped.reset_index(drop=True, inplace=True)
-    return mapped
-
-
-# ──────────────────────────────────────────────
-# ETF份额数据
-# ──────────────────────────────────────────────
-
-def fetch_etf_shares_akshare(date: str) -> pd.DataFrame:
-    """获取指定日期的全市场ETF份额。
-
-    实现方式:
-    - 上交所ETF (51xxxx/58xxxx): fund_etf_scale_sse(date) 支持历史日期
-    - 深交所ETF (15xxxx/56xxxx): fund_etf_scale_szse() 仅快照，无日期参数
-
-    Args:
-        date: 日期字符串, 格式 YYYYMMDD 或 YYYY-MM-DD
-
-    Returns:
-        DataFrame with columns: date, code, share_total
-    """
-    import akshare as ak  # type: ignore
-
-    date_str = date.replace("-", "")
-    all_parts = []
-
-    # 1. 上交所ETF份额（支持历史查询）
-    try:
-        sse_df = ak.fund_etf_scale_sse(date=date_str)
-        if sse_df is not None and not sse_df.empty:
-            # 列名容错: 可能是 "基金代码"/"代码", "份额"/"基金份额"
-            rename_map = {}
-            for col in sse_df.columns:
-                col_lower = str(col)
-                if "代码" in col_lower:
-                    rename_map[col] = "code"
-                elif "份额" in col_lower:
-                    rename_map[col] = "share_total"
-                elif "日期" in col_lower:
-                    rename_map[col] = "raw_date"
-            sse_df.rename(columns=rename_map, inplace=True)
-
-            if "code" in sse_df.columns and "share_total" in sse_df.columns:
-                part = sse_df[["code", "share_total"]].copy()
-                part["code"] = part["code"].astype(str).str.zfill(6)
-                part["share_total"] = pd.to_numeric(part["share_total"], errors="coerce")
-                part["date"] = pd.to_datetime(date_str)
-                all_parts.append(part)
-                logger.info(f"SSE ETF份额: {len(part)}条 ({date_str})")
-    except Exception as exc:
-        logger.warning(f"SSE ETF份额获取失败 ({date_str}): {exc}")
-
-    # 2. 深交所ETF份额（仅快照，无日期参数）
-    try:
-        szse_df = ak.fund_etf_scale_szse()
-        if szse_df is not None and not szse_df.empty:
-            rename_map = {}
-            for col in szse_df.columns:
-                col_lower = str(col)
-                if "代码" in col_lower:
-                    rename_map[col] = "code"
-                elif "份额" in col_lower:
-                    rename_map[col] = "share_total"
-            szse_df.rename(columns=rename_map, inplace=True)
-
-            if "code" in szse_df.columns and "share_total" in szse_df.columns:
-                part = szse_df[["code", "share_total"]].copy()
-                part["code"] = part["code"].astype(str).str.zfill(6)
-                part["share_total"] = pd.to_numeric(part["share_total"], errors="coerce")
-                part["date"] = pd.to_datetime(date_str)
-                all_parts.append(part)
-                logger.info(f"SZSE ETF份额: {len(part)}条")
-    except Exception as exc:
-        logger.warning(f"SZSE ETF份额获取失败: {exc}")
-
-    if not all_parts:
-        logger.warning(f"ETF份额数据为空: {date_str}")
-        return pd.DataFrame()
-
-    result = pd.concat(all_parts, ignore_index=True)
-    result.drop_duplicates(subset=["code"], keep="last", inplace=True)
-    return result[["date", "code", "share_total"]]
-
-
-# ──────────────────────────────────────────────
-# 基金净值（IOPV替代）
-# ──────────────────────────────────────────────
-
-def fetch_etf_nav_akshare(code: str) -> pd.DataFrame:
-    """通过 fund_etf_fund_info_em 获取ETF历史净值（作为IOPV替代）。
-
-    Returns:
-        DataFrame with columns: date, code, nav (单位净值)
-    """
-    import akshare as ak  # type: ignore
-
-    try:
-        df = ak.fund_etf_fund_info_em(fund=code, start_date="20200101")
-    except Exception as exc:
-        logger.warning(f"ETF净值数据获取失败 ({code}): {exc}")
-        return pd.DataFrame()
-
-    if df is None or df.empty:
-        logger.warning(f"ETF净值数据为空: {code}")
-        return pd.DataFrame()
-
-    # 字段名容错
-    rename_candidates = {
-        "净值日期": "date",
-        "单位净值": "nav",
-    }
-    for src, dst in rename_candidates.items():
-        if src in df.columns:
-            df.rename(columns={src: dst}, inplace=True)
-
-    if "date" not in df.columns or "nav" not in df.columns:
-        logger.warning(f"ETF净值数据字段不完整: {list(df.columns)}")
-        return pd.DataFrame()
-
-    result = df[["date", "nav"]].copy()
-    result["date"] = pd.to_datetime(result["date"])
-    result["nav"] = pd.to_numeric(result["nav"], errors="coerce")
-    result["code"] = code
-
-    result.sort_values("date", inplace=True)
-    result.reset_index(drop=True, inplace=True)
-    return result[["date", "code", "nav"]]
-
-
-# ──────────────────────────────────────────────
-# 交易日历
-# ──────────────────────────────────────────────
-
-def fetch_trading_calendar_akshare() -> pd.DataFrame:
-    """获取A股交易日历。
-
-    Returns:
-        DataFrame with column: trade_date (datetime)
-    """
-    import akshare as ak  # type: ignore
-
-    try:
-        df = ak.tool_trade_date_hist_sina()
-    except Exception as exc:
-        logger.warning(f"交易日历获取失败: {exc}")
-        return pd.DataFrame()
-
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    # 字段名处理
-    if "trade_date" in df.columns:
-        col = "trade_date"
-    else:
-        col = df.columns[0]
-
-    result = pd.DataFrame({"trade_date": pd.to_datetime(df[col])})
-    result.sort_values("trade_date", inplace=True)
-    result.reset_index(drop=True, inplace=True)
-    return result
-
-
-# ──────────────────────────────────────────────
-# 指数日线数据（用于相对动量基准）
-# ──────────────────────────────────────────────
-
-def fetch_index_daily_akshare(
-    code: str, start_date: str, end_date: str
-) -> pd.DataFrame:
-    """获取指数日线行情，用于计算相对动量。
-
-    Args:
-        code: 指数代码, 如 "000300" (沪深300)
-
-    Returns:
-        DataFrame with columns: date, code, close
-    """
-    import akshare as ak  # type: ignore
-
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            df = ak.index_zh_a_hist(
-                symbol=code,
-                period="daily",
-                start_date=start_date.replace("-", ""),
-                end_date=end_date.replace("-", ""),
-            )
-            break
-        except Exception as exc:
-            if attempt < max_retries - 1:
-                logger.info(f"指数数据获取重试 ({code}), 第{attempt+2}次...")
-                time.sleep(2)
-            else:
-                logger.warning(f"指数数据获取失败 ({code}): {exc}")
-                return pd.DataFrame()
-
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    rename_map = {"日期": "date", "收盘": "close"}
-    mapped = df.rename(columns=rename_map)
-
-    if "date" not in mapped.columns or "close" not in mapped.columns:
-        logger.warning(f"指数数据字段不完整: {list(mapped.columns)}")
-        return pd.DataFrame()
-
-    result = mapped[["date", "close"]].copy()
-    result["date"] = pd.to_datetime(result["date"])
-    result["close"] = pd.to_numeric(result["close"], errors="coerce")
-    result["code"] = code
-
-    result.sort_values("date", inplace=True)
-    result.reset_index(drop=True, inplace=True)
-    return result
-
-
-# ──────────────────────────────────────────────
-# Tushare Pro 数据源
+# Tushare Pro 配置
 # ──────────────────────────────────────────────
 
 import os
@@ -363,6 +85,10 @@ def probe_tushare() -> DataSourceStatus:
         return DataSourceStatus("tushare", False, f"Tushare Pro 不可用: {exc}")
 
 
+# ──────────────────────────────────────────────
+# ETF日线行情
+# ──────────────────────────────────────────────
+
 def fetch_etf_daily_tushare(code: str, start_date: str, end_date: str) -> pd.DataFrame:
     """通过 Tushare fund_daily 获取ETF日线行情。
 
@@ -411,68 +137,9 @@ def fetch_etf_daily_tushare(code: str, start_date: str, end_date: str) -> pd.Dat
     return result
 
 
-def fetch_index_daily_tushare(
-    code: str, start_date: str, end_date: str
-) -> pd.DataFrame:
-    """通过 Tushare index_daily 获取指数日线行情。
-
-    Returns:
-        DataFrame with columns: date, code, close
-    """
-    import tushare as ts
-
-    pro = ts.pro_api(TUSHARE_TOKEN)
-    ts_code = _to_index_ts_code(code)
-    sd = start_date.replace("-", "")
-    ed = end_date.replace("-", "")
-
-    try:
-        df = pro.index_daily(ts_code=ts_code, start_date=sd, end_date=ed)
-    except Exception as exc:
-        logger.warning(f"Tushare index_daily 失败 ({ts_code}): {exc}")
-        return pd.DataFrame()
-
-    if df is None or df.empty:
-        logger.warning(f"Tushare 指数数据为空: {ts_code}")
-        return pd.DataFrame()
-
-    result = pd.DataFrame({
-        "date": pd.to_datetime(df["trade_date"]),
-        "close": pd.to_numeric(df["close"], errors="coerce"),
-        "code": code,
-    })
-
-    result.sort_values("date", inplace=True)
-    result.reset_index(drop=True, inplace=True)
-    return result
-
-
-def fetch_trading_calendar_tushare() -> pd.DataFrame:
-    """通过 Tushare trade_cal 获取交易日历。
-
-    Returns:
-        DataFrame with column: trade_date (datetime)
-    """
-    import tushare as ts
-
-    pro = ts.pro_api(TUSHARE_TOKEN)
-
-    try:
-        df = pro.trade_cal(exchange='SSE', start_date='20100101', end_date='20301231')
-    except Exception as exc:
-        logger.warning(f"Tushare 交易日历获取失败: {exc}")
-        return pd.DataFrame()
-
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    # 仅保留交易日 (is_open == 1)
-    open_days = df[df["is_open"] == 1].copy()
-    result = pd.DataFrame({"trade_date": pd.to_datetime(open_days["cal_date"])})
-    result.sort_values("trade_date", inplace=True)
-    result.reset_index(drop=True, inplace=True)
-    return result
-
+# ──────────────────────────────────────────────
+# ETF份额数据
+# ──────────────────────────────────────────────
 
 def fetch_etf_shares_tushare(
     codes: list,
@@ -530,6 +197,190 @@ def fetch_etf_shares_tushare(
 
     result = pd.concat(all_parts, ignore_index=True)
     result.sort_values(["code", "date"], inplace=True)
+    result.reset_index(drop=True, inplace=True)
+    return result
+
+
+# ──────────────────────────────────────────────
+# 股票技术面因子（MACD、均线等）
+# ──────────────────────────────────────────────
+
+def fetch_stk_factor_pro_tushare(
+    code: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """通过 Tushare stk_factor_pro 获取股票技术面因子数据。
+
+    接口说明:
+    - 包含MACD、均线、KDJ等技术指标
+    - 需要5000积分以上权限
+    - 单次最多返回10000条
+
+    Args:
+        code: ETF代码（6位）
+        start_date: 开始日期 (YYYY-MM-DD)
+        end_date: 结束日期 (YYYY-MM-DD)
+
+    Returns:
+        DataFrame with columns: date, code, macd, macd_dea, macd_dif,
+                               ma5, ma10, ma20, ma60, etc.
+    """
+    import tushare as ts
+
+    pro = ts.pro_api(TUSHARE_TOKEN)
+    ts_code = _to_ts_code(code)
+    sd = start_date.replace("-", "")
+    ed = end_date.replace("-", "")
+
+    try:
+        df = pro.stk_factor_pro(
+            ts_code=ts_code,
+            start_date=sd,
+            end_date=ed,
+        )
+    except Exception as exc:
+        logger.warning(f"Tushare stk_factor_pro 失败 ({ts_code}): {exc}")
+        return pd.DataFrame()
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # 字段映射 - 选择我们需要的指标
+    result_columns = {
+        "date": pd.to_datetime(df["trade_date"]),
+        "code": code,
+        # MACD指标
+        "macd": pd.to_numeric(df.get("macd_bfq", pd.NA), errors="coerce"),
+        "macd_dea": pd.to_numeric(df.get("macd_dea_bfq", pd.NA), errors="coerce"),
+        "macd_dif": pd.to_numeric(df.get("macd_dif_bfq", pd.NA), errors="coerce"),
+        # 均线指标
+        "ma5": pd.to_numeric(df.get("ma_bfq_5", pd.NA), errors="coerce"),
+        "ma10": pd.to_numeric(df.get("ma_bfq_10", pd.NA), errors="coerce"),
+        "ma20": pd.to_numeric(df.get("ma_bfq_20", pd.NA), errors="coerce"),
+        "ma60": pd.to_numeric(df.get("ma_bfq_60", pd.NA), errors="coerce"),
+        # 其他技术指标
+        "rsi_6": pd.to_numeric(df.get("rsi_bfq_6", pd.NA), errors="coerce"),
+        "rsi_12": pd.to_numeric(df.get("rsi_bfq_12", pd.NA), errors="coerce"),
+        "kdj_k": pd.to_numeric(df.get("kdj_k_bfq", pd.NA), errors="coerce"),
+        "kdj_d": pd.to_numeric(df.get("kdj_d_bfq", pd.NA), errors="coerce"),
+        "kdj_j": pd.to_numeric(df.get("kdj_j_bfq", pd.NA), errors="coerce"),
+        "vol_ratio": pd.to_numeric(df.get("volume_ratio", pd.NA), errors="coerce"),
+    }
+
+    result = pd.DataFrame(result_columns)
+    result = result.dropna(subset=["date"])
+    result.sort_values("date", inplace=True)
+    result.reset_index(drop=True, inplace=True)
+    return result
+
+
+# ──────────────────────────────────────────────
+# 基金净值（IOPV替代）
+# ──────────────────────────────────────────────
+
+def fetch_etf_nav_tushare(code: str) -> pd.DataFrame:
+    """通过 Tushare fund_nav 获取ETF历史净值（作为IOPV替代）。
+
+    Returns:
+        DataFrame with columns: date, code, nav (单位净值)
+    """
+    import tushare as ts
+
+    pro = ts.pro_api(TUSHARE_TOKEN)
+    ts_code = _to_ts_code(code)
+
+    try:
+        # fund_nav 获取基金净值
+        df = pro.fund_nav(ts_code=ts_code)
+    except Exception as exc:
+        logger.warning(f"Tushare fund_nav 失败 ({ts_code}): {exc}")
+        return pd.DataFrame()
+
+    if df is None or df.empty:
+        logger.warning(f"Tushare ETF净值数据为空: {ts_code}")
+        return pd.DataFrame()
+
+    # 字段映射: ann_date 公告日期, unit_nav 单位净值
+    result = pd.DataFrame({
+        "date": pd.to_datetime(df["ann_date"]),
+        "nav": pd.to_numeric(df.get("unit_nav", df.get("nav", pd.NA)), errors="coerce"),
+        "code": code,
+    })
+
+    result = result.dropna(subset=["date", "nav"])
+    result.sort_values("date", inplace=True)
+    result.reset_index(drop=True, inplace=True)
+    return result[["date", "code", "nav"]]
+
+
+# ──────────────────────────────────────────────
+# 交易日历
+# ──────────────────────────────────────────────
+
+def fetch_trading_calendar_tushare() -> pd.DataFrame:
+    """通过 Tushare trade_cal 获取交易日历。
+
+    Returns:
+        DataFrame with column: trade_date (datetime)
+    """
+    import tushare as ts
+
+    pro = ts.pro_api(TUSHARE_TOKEN)
+
+    try:
+        df = pro.trade_cal(exchange='SSE', start_date='20100101', end_date='20301231')
+    except Exception as exc:
+        logger.warning(f"Tushare 交易日历获取失败: {exc}")
+        return pd.DataFrame()
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # 仅保留交易日 (is_open == 1)
+    open_days = df[df["is_open"] == 1].copy()
+    result = pd.DataFrame({"trade_date": pd.to_datetime(open_days["cal_date"])})
+    result.sort_values("trade_date", inplace=True)
+    result.reset_index(drop=True, inplace=True)
+    return result
+
+
+# ──────────────────────────────────────────────
+# 指数日线数据（用于相对动量基准）
+# ──────────────────────────────────────────────
+
+def fetch_index_daily_tushare(
+    code: str, start_date: str, end_date: str
+) -> pd.DataFrame:
+    """通过 Tushare index_daily 获取指数日线行情。
+
+    Returns:
+        DataFrame with columns: date, code, close
+    """
+    import tushare as ts
+
+    pro = ts.pro_api(TUSHARE_TOKEN)
+    ts_code = _to_index_ts_code(code)
+    sd = start_date.replace("-", "")
+    ed = end_date.replace("-", "")
+
+    try:
+        df = pro.index_daily(ts_code=ts_code, start_date=sd, end_date=ed)
+    except Exception as exc:
+        logger.warning(f"Tushare index_daily 失败 ({ts_code}): {exc}")
+        return pd.DataFrame()
+
+    if df is None or df.empty:
+        logger.warning(f"Tushare 指数数据为空: {ts_code}")
+        return pd.DataFrame()
+
+    result = pd.DataFrame({
+        "date": pd.to_datetime(df["trade_date"]),
+        "close": pd.to_numeric(df["close"], errors="coerce"),
+        "code": code,
+    })
+
+    result.sort_values("date", inplace=True)
     result.reset_index(drop=True, inplace=True)
     return result
 

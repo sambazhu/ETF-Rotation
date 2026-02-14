@@ -1,10 +1,12 @@
-"""三层信号生成器（v2.0）。
+"""三层信号生成器（v2.1）。
 
 整合宏观、宽基、行业三层信号：
-- 震荡市识别与应对（降频+提高门槛）
+- 风格判断与自适应（新增）
+- 动态因子权重调整（新增）
+- 趋势择时与仓位管理（新增）
+- 震荡市识别与应对
 - 分层调仓频率控制
 - 交易成本最小调仓门槛
-- 从DataProcessor输出的Z-score列读取因子
 """
 
 from __future__ import annotations
@@ -21,10 +23,19 @@ from config.etf_pool import (
     get_broad_codes,
     get_sector_codes,
 )
-from config.strategy_config import SIGNAL_CONFIG, RISK_CONFIG
+from config.strategy_config import (
+    SIGNAL_CONFIG,
+    RISK_CONFIG,
+    STYLE_CONFIG,
+    DYNAMIC_WEIGHT_CONFIG,
+    TIMING_CONFIG,
+)
 from strategy.macro_signal import MacroSignal
 from strategy.broad_based_rotation import BroadBasedRotation
 from strategy.sector_rotation import SectorRotation
+from strategy.style_detector import StyleDetector, StyleBiasResult
+from strategy.dynamic_weights import DynamicWeightAdjuster
+from strategy.timing_model import TimingModel, TrendStrengthResult
 
 
 def _safe_float(value, default: float = 0.0) -> float:
@@ -39,13 +50,35 @@ def _safe_float(value, default: float = 0.0) -> float:
 
 
 class SignalGenerator:
-    """聚合宏观、宽基、行业三层信号（v2.0）。"""
+    """聚合宏观、宽基、行业三层信号（v2.1）
+
+    新增功能：
+    - 风格判断与自适应
+    - 动态因子权重调整
+    - 趋势择时与仓位管理
+    """
 
     def __init__(self, signal_config: Optional[Dict] = None,
                  risk_config: Optional[Dict] = None):
         self.config = signal_config or SIGNAL_CONFIG
         self.risk_config = risk_config or RISK_CONFIG
 
+        # v2.1 新增模块
+        self.style_detector = StyleDetector(
+            large_cap_index=STYLE_CONFIG.get("large_cap_index", "510300"),
+            small_cap_index=STYLE_CONFIG.get("small_cap_index", "512100"),
+            lookback_days=STYLE_CONFIG.get("lookback_days", 20),
+            style_confirm_threshold=STYLE_CONFIG.get("style_confirm_threshold", 3),
+            min_hold_days=STYLE_CONFIG.get("min_hold_days", 10),
+        )
+        self.weight_adjuster = DynamicWeightAdjuster(
+            dynamic_config=DYNAMIC_WEIGHT_CONFIG
+        )
+        self.timing_model = TimingModel(
+            timing_config=TIMING_CONFIG
+        )
+
+        # 核心引擎（使用动态权重）
         self.macro_engine = MacroSignal(
             weights=self.config["macro_weights"],
             scale_factor=self.config.get("scale_factor", 33.3),
@@ -79,9 +112,14 @@ class SignalGenerator:
         self.score_history: List[float] = []
         self.vol_history: List[float] = []
 
+        # v2.1 新增：缓存最新状态
+        self.current_style: Optional[StyleBiasResult] = None
+        self.current_trend: Optional[TrendStrengthResult] = None
+        self.current_regime: str = "transitional"
+
     def generate_signals(self, date: pd.Timestamp,
                          market_data: Dict[str, pd.DataFrame]) -> Dict:
-        """生成某个交易日的三层信号。
+        """生成某个交易日的三层信号（v2.1 集成风格判断、动态权重、择时）
 
         Args:
             date: 交易日
@@ -89,37 +127,83 @@ class SignalGenerator:
 
         Returns:
             Dict with keys: date, macro, broad_ranked, sector_ranked,
-                           broad_weights, sector_weights, choppy_mode
+                           broad_weights, sector_weights, choppy_mode,
+                           style_bias, trend_strength, market_regime  (新增)
         """
         snapshots = self._build_daily_snapshot(date, market_data)
 
+        # ========== v2.1 新增：市场环境分析 ==========
+        # 1. 风格判断
+        style_bias = self.style_detector.detect_style(date, market_data)
+        self.current_style = style_bias
+
+        # 2. 趋势强度评估
+        trend_strength = self.timing_model.calculate_trend_strength(date, market_data)
+        self.current_trend = trend_strength
+
+        # 3. 市场环境识别（趋势/震荡/过渡）
+        market_regime = self._detect_market_regime(
+            trend_strength.score,
+            self.score_history[-60:] if len(self.score_history) >= 60 else self.score_history
+        )
+        self.current_regime = market_regime
+
+        # 4. 动态权重调整
+        dynamic_weights = self.weight_adjuster.adjust_weights(
+            market_regime,
+            style_bias.style,
+            {
+                "macro": self.config["macro_weights"].copy(),
+                "broad": self.config["broad_weights"].copy(),
+                "sector": self.config["sector_weights"].copy(),
+            }
+        )
+        # 更新引擎权重
+        self.macro_engine.weights = dynamic_weights["macro"]
+        self.broad_engine.weights = dynamic_weights["broad"]
+        self.sector_engine.weights = dynamic_weights["sector"]
+
+        # ========== 原有信号生成逻辑 ==========
         # 第一层：宏观
         macro_signal = self.macro_engine.calculate(snapshots["macro"])
         self.score_history.append(macro_signal["score"])
 
-        # 检查震荡市
+        # 检查震荡市（v2.1：使用趋势强度辅助判断）
         self._update_choppy_state(macro_signal["score"], snapshots["all"])
 
-        # 第二层：宽基
+        # 第二层：宽基（v2.1：根据风格调整）
         broad_ranked = self.broad_engine.rank(snapshots["broad"])
+        # 应用风格调整
+        broad_ranked = self._apply_style_adjustment(broad_ranked, style_bias)
 
         # 第三层：行业
         benchmark_ret_20d = self._get_benchmark_return(snapshots["all"])
         sector_ranked = self.sector_engine.rank(snapshots["sector"], benchmark_ret_20d)
 
-        # 仓位分配
-        equity_ratio = macro_signal["total_equity_ratio"]
+        # ========== v2.1 新增：动态仓位分配 ==========
+        # 根据择时模型计算总权益仓位
+        base_equity_ratio = macro_signal["total_equity_ratio"]
+        adjusted_equity_ratio = self.timing_model.adjust_position(
+            base_equity_ratio,
+            trend_strength,
+            style_bias
+        )
 
-        # 宽基:行业 = 50:50（可调，震荡市时偏向宽基）
-        broad_pct = 0.50 if not self.choppy_mode else 0.60
-        sector_pct = 1.0 - broad_pct
+        # 根据风格调整宽基/行业比例
+        broad_pct = style_bias.broad_based_ratio
+        sector_pct = style_bias.sector_ratio
+
+        # 震荡市时进一步降低行业暴露
+        if self.choppy_mode:
+            broad_pct = min(0.7, broad_pct + 0.1)
+            sector_pct = max(0.2, sector_pct - 0.1)
 
         broad_weights = self.broad_engine.allocate_weights(
-            broad_ranked, equity_ratio * broad_pct
+            broad_ranked, adjusted_equity_ratio * broad_pct
         )
         sector_weights = self.sector_engine.allocate_weights(
-            sector_ranked, equity_ratio * sector_pct,
-            max_single=0.15 if self.choppy_mode else 0.30,
+            sector_ranked, adjusted_equity_ratio * sector_pct,
+            max_single=0.15 if self.choppy_mode else 0.25,
         )
 
         broad_details = self._build_broad_details(broad_ranked, broad_weights)
@@ -136,7 +220,8 @@ class SignalGenerator:
             "broad_weights": broad_weights,
             "sector_weights": sector_weights,
             "target_weights": {**broad_weights, **sector_weights},
-            "total_equity_ratio": equity_ratio,
+            "total_equity_ratio": adjusted_equity_ratio,
+            "base_equity_ratio": base_equity_ratio,  # 原始宏观仓位
             "weight_split": {
                 "broad_pct": broad_pct,
                 "sector_pct": sector_pct,
@@ -148,6 +233,21 @@ class SignalGenerator:
             "broad_target_details": [item for item in broad_details if item.get("target_weight", 0) > 0],
             "sector_target_details": [item for item in sector_details if item.get("target_weight", 0) > 0],
             "choppy_mode": self.choppy_mode,
+            # v2.1 新增字段
+            "style_bias": {
+                "style": style_bias.style,
+                "confidence": style_bias.confidence,
+                "large_cap_focus": style_bias.large_cap_focus,
+                "preferred_broad": style_bias.preferred_broad,
+            },
+            "trend_strength": {
+                "score": trend_strength.score,
+                "regime": trend_strength.regime,
+                "recommended_position": trend_strength.recommended_position,
+                "components": trend_strength.components,
+            },
+            "market_regime": market_regime,
+            "dynamic_weights": dynamic_weights,
         }
 
     def _build_broad_details(self, ranked: pd.DataFrame, target_weights: Dict[str, float]) -> List[Dict]:
@@ -369,3 +469,58 @@ class SignalGenerator:
                 return True
 
         return False
+
+    # ========== v2.1 新增辅助方法 ==========
+    def _detect_market_regime(self, trend_score: float, score_history: List[float]) -> str:
+        """检测市场环境：trending, choppy, transitional"""
+        if len(score_history) < 20:
+            return "transitional"
+
+        # 计算历史波动率
+        recent_scores = score_history[-20:]
+        score_vol = np.std(recent_scores) if len(recent_scores) > 1 else 0
+
+        # 获取配置阈值
+        vol_threshold_high = np.percentile(self.vol_history[-60:], 60) if len(self.vol_history) >= 60 else 0.02
+        macro_score_abs = abs(recent_scores[-1]) if recent_scores else 0
+
+        # 判断市场环境
+        if trend_score >= 60 and macro_score_abs > 40:
+            return "trending"
+        elif trend_score <= 40 and macro_score_abs < 20:
+            return "choppy"
+        else:
+            return "transitional"
+
+    def _apply_style_adjustment(self, broad_ranked: pd.DataFrame, style_bias: StyleBiasResult) -> pd.DataFrame:
+        """根据风格偏好调整宽基评分"""
+        if broad_ranked.empty or style_bias.style == "neutral":
+            return broad_ranked
+
+        adjusted = broad_ranked.copy()
+
+        # 定义大盘/小盘ETF代码
+        large_cap_codes = {"510300", "159591", "159601", "510500"}  # 沪深300, 中证A50, 中证500
+        small_cap_codes = {"512100", "159532", "159537", "588000", "159915"}  # 中证1000, 中证2000, 科创50, 创业板
+
+        # 应用风格调整
+        for idx, row in adjusted.iterrows():
+            code = str(row.get("code", ""))
+
+            if style_bias.style == "large_cap":
+                if code in large_cap_codes:
+                    adjusted.at[idx, "score"] *= 1.3  # 提升大盘评分
+                elif code in small_cap_codes:
+                    adjusted.at[idx, "score"] *= 0.7  # 降低小盘评分
+
+            elif style_bias.style == "small_cap":
+                if code in small_cap_codes:
+                    adjusted.at[idx, "score"] *= 1.3  # 提升小盘评分
+                elif code in large_cap_codes:
+                    adjusted.at[idx, "score"] *= 0.7  # 降低大盘评分
+
+        # 重新排序
+        adjusted = adjusted.sort_values("score", ascending=False).reset_index(drop=True)
+        adjusted["rank"] = range(1, len(adjusted) + 1)
+
+        return adjusted

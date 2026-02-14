@@ -13,10 +13,10 @@ from typing import Dict, List
 
 BROAD_BASED_ETF_POOL: List[Dict[str, str]] = [
     {"code": "510300", "name": "沪深300", "style": "大盘价值", "scope": "大盘蓝筹"},
-    {"code": "159601", "name": "中证A50", "style": "大盘核心", "scope": "各行业龙头50只"},
+    {"code": "159591", "name": "中证A50ETF", "style": "大盘核心", "scope": "各行业龙头50只"},  # 修正: 原159601
     {"code": "510500", "name": "中证500", "style": "中盘", "scope": "中盘成长"},
     {"code": "512100", "name": "中证1000", "style": "小盘", "scope": "小盘股票"},
-    {"code": "159537", "name": "国证2000", "style": "微盘", "scope": "微盘股覆盖"},
+    {"code": "159532", "name": "中证2000ETF易方达", "style": "微盘", "scope": "微盘股覆盖"},  # 修正: 原159537
     {"code": "588000", "name": "科创50", "style": "科技成长", "scope": "科创板科技"},
     {"code": "159915", "name": "创业板", "style": "成长", "scope": "创业板成长股"},
     {"code": "512890", "name": "红利低波", "style": "价值防御", "scope": "高股息低波动"},
@@ -30,22 +30,22 @@ SECTOR_ETF_POOL: List[Dict[str, str]] = [
     {"code": "159819", "name": "人工智能", "category": "科技"},
     {"code": "512760", "name": "芯片", "category": "科技"},
     {"code": "562500", "name": "机器人", "category": "科技"},
-    {"code": "515700", "name": "光伏", "category": "新能源"},
-    {"code": "516160", "name": "储能", "category": "新能源"},
+    {"code": "515790", "name": "光伏", "category": "新能源"},
+    {"code": "159881", "name": "储能", "category": "新能源"},
     {"code": "512690", "name": "白酒", "category": "消费"},
     {"code": "159928", "name": "消费", "category": "消费"},
     {"code": "512010", "name": "医药", "category": "医药"},
     {"code": "512170", "name": "医疗", "category": "医药"},
     {"code": "512880", "name": "证券", "category": "金融"},
-    {"code": "512070", "name": "银行", "category": "金融"},
+    {"code": "512800", "name": "银行", "category": "金融"},
     {"code": "512400", "name": "有色金属", "category": "周期"},
     {"code": "512200", "name": "房地产", "category": "周期"},
-    {"code": "560660", "name": "工业母机", "category": "高端制造"},
-    {"code": "159790", "name": "电池", "category": "新能源"},
+    {"code": "159667", "name": "工业母机", "category": "高端制造"},
+    {"code": "159755", "name": "电池", "category": "新能源"},
     {"code": "515220", "name": "煤炭", "category": "周期"},
     {"code": "516950", "name": "基建", "category": "周期"},
     {"code": "512660", "name": "军工", "category": "主题"},
-    {"code": "512680", "name": "家电", "category": "消费"},
+    {"code": "159996", "name": "家电", "category": "消费"},
 ]
 
 

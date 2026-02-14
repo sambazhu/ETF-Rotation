@@ -29,28 +29,28 @@ BACKTEST_CONFIG = {
 
 
 SIGNAL_CONFIG = {
-    # ─── 宏观层权重（5因子） ───
+    # ─── 宏观层权重（5因子）─优化：大幅降低资金流权重，提高动量权重 ───
     "macro_weights": {
-        "net_inflow": 0.35,
-        "flow_acceleration": 0.15,
+        "net_inflow": 0.15,        # 大幅降低（原0.35→0.25→0.15）
+        "flow_acceleration": 0.10, # 降低（原0.15）
         "intraday_premium": 0.10,
-        "premium": 0.20,
-        "momentum": 0.20,
+        "premium": 0.10,           # 降低（原0.15）
+        "momentum": 0.55,          # 大幅提高（原0.20→0.35→0.55），主导趋势跟踪
     },
-    # ─── 宽基层权重（4因子） ───
+    # ─── 宽基层权重（4因子）─优化：大幅降低MFI权重，提高动量权重 ───
     "broad_weights": {
-        "mfi": 0.40,
-        "mfa": 0.15,            # 资金流加速度
-        "pdi": 0.25,
-        "cmc": 0.20,
+        "mfi": 0.20,               # 大幅降低（原0.40→0.35→0.20）
+        "mfa": 0.10,               # 降低（原0.15）
+        "pdi": 0.20,               # 维持
+        "cmc": 0.50,               # 大幅提高（原0.20→0.30→0.50）
     },
-    # ─── 行业层权重（5因子） ───
+    # ─── 行业层权重（5因子）─优化：降低资金流权重，提高动量权重 ───
     "sector_weights": {
-        "fund_flow": 0.40,
-        "flow_acceleration": 0.15,
+        "fund_flow": 0.20,         # 大幅降低（原0.40→0.35→0.20）
+        "flow_acceleration": 0.10, # 降低（原0.15）
         "intraday_premium": 0.10,
-        "relative_momentum": 0.25,
-        "valuation": 0.10,
+        "relative_momentum": 0.45, # 大幅提高（原0.25→0.30→0.45）
+        "valuation": 0.15,         # 略提高（原0.10）
     },
     # ─── 回看窗口期 ───
     "lookback": {
@@ -66,25 +66,25 @@ SIGNAL_CONFIG = {
         "valuation_days": 252,
         "standardize_window": 60, # 滚动Z-score标准化窗口
     },
-    # ─── 评分阈值（优化：提高阈值减少交易） ───
+    # ─── 评分阈值（优化：平衡阈值，提高信号敏感度） ───
     "thresholds": {
-        "broad_main": 50,             # 提高（原40）
-        "broad_aux": 25,              # 提高（原20）
-        "sector_main": 70,            # 提高（原60）
-        "sector_aux": 45,             # 提高（原40）
-        "sector_avoid": 25,           # 提高（原20）
+        "broad_main": 40,             # 恢复（原50过高）
+        "broad_aux": 20,              # 恢复（原25过高）
+        "sector_main": 55,            # 降低（原70过高）
+        "sector_aux": 35,             # 降低（原45过高）
+        "sector_avoid": 20,           # 恢复（原25过高）
     },
     # ─── 评分缩放系数 ───
     "scale_factor": 33.3,  # Z-score最大±3 → 评分映射到±100
-    # ─── sigmoid平滑系数 ───
-    "sigmoid_smoothing": 15,
+    # ─── sigmoid平滑系数（优化：大幅降低使中等正评分对应更高仓位） ───
+    "sigmoid_smoothing": 5,  # 原15→8→6→5，score=+10 → ~88% 仓位
     # ─── 过热过滤器（优化：更严格的过滤） ───
     "overheat_threshold": 0.12,       # 降低阈值（原15%）
     "overheat_decay": 0.6,            # 增加衰减（原0.5）
     "overheat_lookback_days": 10,
-    # ─── 交易成本控制（优化：提高门槛） ───
-    "min_trade_threshold": 0.08,      # 单品种仓位变化<8%不调仓（原5%）
-    "min_score_change": 20,           # 评分变化<20不触发买卖（原15）
+    # ─── 交易成本控制（优化：降低门槛增加交易活跃度） ───
+    "min_trade_threshold": 0.08,      # 单品种仓位变化<8%不调仓（原15%）
+    "min_score_change": 20,           # 评分变化<20不触发买卖（原35）
 }
 
 
@@ -117,4 +117,169 @@ RISK_CONFIG = {
     "choppy_vol_percentile": 30,          # 提高（原25）
     "choppy_min_score_change": 40,        # 提高（原30）
     "choppy_max_single_position": 0.15,   # 震荡市降低集中度
+}
+
+
+# ─── v2.1 新增：风格判断配置 ───
+STYLE_CONFIG = {
+    "large_cap_index": "510300",      # 沪深300
+    "small_cap_index": "512100",      # 中证1000
+    "lookback_days": 20,
+    "return_diff_threshold": 0.03,    # 3%收益差阈值
+    "flow_ratio_threshold": 1.2,      # 资金流比阈值
+    "style_confirm_threshold": 3,     # 连续3次确认才切换
+    "min_hold_days": 10,              # 最少持有10天
+
+    # 风格调整映射
+    "allocation_adjustment": {
+        "large_cap": {
+            "broad_based_ratio": 0.6,   # 大盘主导时增加宽基配置
+            "sector_ratio": 0.4,
+            "factor_multipliers": {
+                "momentum": 1.5,
+                "fund_flow": 0.8,
+                "valuation": 1.2
+            }
+        },
+        "small_cap": {
+            "broad_based_ratio": 0.4,   # 小盘主导时减少宽基
+            "sector_ratio": 0.6,
+            "factor_multipliers": {
+                "momentum": 1.3,
+                "fund_flow": 1.2,
+                "flow_acceleration": 1.3
+            }
+        },
+        "neutral": {
+            "broad_based_ratio": 0.5,
+            "sector_ratio": 0.5,
+            "factor_multipliers": {}
+        }
+    }
+}
+
+
+# ─── v2.1 新增：动态因子权重配置 ───
+DYNAMIC_WEIGHT_CONFIG = {
+    # 市场环境分类阈值
+    "market_regime_thresholds": {
+        "trending": {"vol_percentile": 60, "macro_score_abs": 40},
+        "choppy": {"vol_percentile": 40, "macro_score_abs": 20},
+    },
+
+    # 宏观层动态权重
+    "macro_weights": {
+        "trending": {
+            "net_inflow": 0.30,
+            "flow_acceleration": 0.10,
+            "intraday_premium": 0.10,
+            "premium": 0.15,
+            "momentum": 0.35,
+        },
+        "choppy": {
+            "net_inflow": 0.40,
+            "flow_acceleration": 0.15,
+            "intraday_premium": 0.15,
+            "premium": 0.25,
+            "momentum": 0.05,
+        },
+        "transitional": {
+            "net_inflow": 0.35,
+            "flow_acceleration": 0.15,
+            "intraday_premium": 0.10,
+            "premium": 0.20,
+            "momentum": 0.20,
+        }
+    },
+
+    # 宽基层动态权重
+    "broad_weights": {
+        "trending": {
+            "mfi": 0.30,
+            "mfa": 0.10,
+            "pdi": 0.20,
+            "cmc": 0.40,
+        },
+        "choppy": {
+            "mfi": 0.45,
+            "mfa": 0.20,
+            "pdi": 0.25,
+            "cmc": 0.10,
+        },
+        "transitional": {
+            "mfi": 0.40,
+            "mfa": 0.15,
+            "pdi": 0.25,
+            "cmc": 0.20,
+        }
+    },
+
+    # 行业层动态权重
+    "sector_weights": {
+        "trending": {
+            "fund_flow": 0.30,
+            "flow_acceleration": 0.10,
+            "intraday_premium": 0.10,
+            "relative_momentum": 0.40,
+            "valuation": 0.10,
+        },
+        "choppy": {
+            "fund_flow": 0.45,
+            "flow_acceleration": 0.20,
+            "intraday_premium": 0.15,
+            "relative_momentum": 0.10,
+            "valuation": 0.10,
+        },
+        "transitional": {
+            "fund_flow": 0.40,
+            "flow_acceleration": 0.15,
+            "intraday_premium": 0.10,
+            "relative_momentum": 0.25,
+            "valuation": 0.10,
+        }
+    }
+}
+
+
+# ─── v2.1 新增：择时模型配置 ───
+TIMING_CONFIG = {
+    "benchmark_index": "510300",      # 沪深300作为基准
+    "lookback_days": 20,
+
+    # 趋势强度阈值
+    "trend_thresholds": {
+        "strong_uptrend": 80,
+        "uptrend": 60,
+        "sideways": 40,
+        "downtrend": 20,
+        "strong_downtrend": 0,
+    },
+
+    # 仓位调整系数
+    "position_multipliers": {
+        "strong_uptrend": 1.2,
+        "uptrend": 1.0,
+        "sideways": 0.7,
+        "downtrend": 0.4,
+        "strong_downtrend": 0.0,
+    },
+
+    # 均线参数
+    "ma_periods": [5, 10, 20, 60],
+
+    # 调仓频率（根据趋势状态）
+    "rebalance_intervals": {
+        "strong_uptrend": 5,     # 强趋势：5天
+        "uptrend": 10,           # 上升趋势：10天
+        "sideways": 20,          # 震荡：20天
+        "downtrend": 30,         # 下行：30天
+        "strong_downtrend": 999  # 空仓：不操作
+    },
+
+    # 风格调整系数
+    "style_multipliers": {
+        "large_cap": 1.1,    # 大盘主导，风险较低
+        "small_cap": 0.9,    # 小盘主导，波动大
+        "neutral": 1.0,
+    }
 }

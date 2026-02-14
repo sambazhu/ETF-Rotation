@@ -26,6 +26,9 @@ desktop.ini
 # Cache
 data/cache/
 
+# Output (generated reports)
+output/
+
 # Logs
 *.log
 
@@ -34,7 +37,10 @@ data/cache/
 .agent/
 
 # Local Config
-# .env is now tracked
+.env
 
 # Claude Code CLI
 .claude/
+
+# Windows NUL file
+nul
