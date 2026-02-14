@@ -1,9 +1,9 @@
 # 资金驱动ETF轮动策略交易系统 - 产品需求文档
 
-**文档版本**：v2.1
+**文档版本**：v2.2
 **创建日期**：2026-02-06
 **最后更新**：2026-02-14
-**策略类型**：三层量化轮动（宏观→宽基→行业）+ 风格自适应 + 动态择时
+**策略类型**：三层量化轮动（宏观→宽基→行业）+ 风格自适应 + 动态择时 + MACD趋势确认
 **目标用户**：个人投资者、量化爱好者
 
 ---
@@ -51,7 +51,7 @@
 
 ## 二、策略逻辑
 
-### 2.1 驱动因子权重（动态调整机制 v2.1）
+### 2.1 驱动因子权重（动态调整机制 v2.2）
 
 #### 2.1.1 基础权重配置
 
@@ -63,35 +63,87 @@
 | **折溢价行为** | 15%-20% | 10%-25% | 一二级市场定价偏差的量化反映 |
 | **动量/估值** | 15%-20% | 10%-35% | 趋势确认与风险控制，趋势市可提高 |
 
-#### 2.1.2 市场环境自适应权重调整（新增 v2.1）
+#### 2.1.2 市场环境自适应权重调整（v2.2实现）
 
-根据市场风格和环境动态调整因子权重：
+动态权重调整器根据市场风格动态调整因子权重：
 
 ```python
-# 动态权重调整规则
-DYNAMIC_WEIGHT_CONFIG = {
-    # ─── 基于市场风格的调整 ───
-    'large_cap_dominant': {       # 大盘主导市场
-        'momentum': 1.5,          # 动量权重提升50%
-        'fund_flow': 0.8,         # 资金流权重降低
-        'valuation': 1.2,         # 估值权重提升
+class DynamicWeightAdjuster:
+    """动态权重调整器（v2.2实现）"""
+
+    def adjust_weights(self, market_regime, market_style, base_weights):
+        """根据市场环境和风格调整权重
+
+        Args:
+            market_regime: 'trending', 'choppy', 'transitional'
+            market_style: 'large_cap', 'small_cap', 'neutral'
+            base_weights: {'macro': {...}, 'broad': {...}, 'sector': {...}}
+        """
+        # 1. 应用市场环境权重
+        for layer in ['macro', 'broad', 'sector']:
+            regime_weights = self.config.get(f'{layer}_weights', {}).get(market_regime, {})
+            result[layer] = regime_weights.copy() if regime_weights else base_weights[layer].copy()
+
+        # 2. 应用风格调整
+        result = self._apply_style_adjustment(result, market_style)
+        return result
+
+    def _apply_style_adjustment(self, weights, market_style):
+        """根据市场风格微调权重并归一化"""
+        if market_style == 'large_cap':
+            # 大盘主导：动量权重提升20%，资金流权重降低10%
+            for layer in adjusted:
+                if 'momentum' in adjusted[layer]:
+                    adjusted[layer]['momentum'] *= 1.2
+                if 'fund_flow' in adjusted[layer] or 'mfi' in adjusted[layer]:
+                    key = 'fund_flow' if 'fund_flow' in adjusted[layer] else 'mfi'
+                    adjusted[layer][key] *= 0.9
+
+        elif market_style == 'small_cap':
+            # 小盘主导：资金流和加速度权重提升15%
+            for layer in adjusted:
+                if 'fund_flow' in adjusted[layer] or 'mfi' in adjusted[layer]:
+                    key = 'fund_flow' if 'fund_flow' in adjusted[layer] else 'mfi'
+                    adjusted[layer][key] *= 1.15
+                if 'flow_acceleration' in adjusted[layer] or 'mfa' in adjusted[layer]:
+                    key = 'flow_acceleration' if 'flow_acceleration' in adjusted[layer] else 'mfa'
+                    adjusted[layer][key] *= 1.15
+
+        # 归一化每层权重（确保总和为1）
+        for layer in adjusted:
+            total = sum(adjusted[layer].values())
+            if total > 0:
+                adjusted[layer] = {k: v/total for k, v in adjusted[layer].items()}
+
+        return adjusted
+```
+
+#### 2.1.3 动态权重配置示例
+
+```python
+# 宏观层动态权重
+DYNAMIC_MACRO_WEIGHTS = {
+    'trending': {          # 趋势市
+        'net_inflow': 0.30,
+        'flow_acceleration': 0.10,
+        'intraday_premium': 0.10,
+        'premium': 0.15,
+        'momentum': 0.35,      # 动量权重提高
     },
-    'small_cap_dominant': {       # 小盘主导市场
-        'momentum': 1.3,          # 动量权重提升30%
-        'fund_flow': 1.2,         # 资金流权重提升
-        'flow_acceleration': 1.3, # 加速度权重提升
+    'choppy': {            # 震荡市
+        'net_inflow': 0.40,
+        'flow_acceleration': 0.15,
+        'intraday_premium': 0.15,
+        'premium': 0.25,       # 折溢价权重提高
+        'momentum': 0.05,      # 动量权重降低
     },
-    'trending_market': {          # 趋势明确市场
-        'momentum': 1.5,          # 动量权重提升50%
-        'fund_flow': 1.1,         # 资金流略提升
-        'intraday_premium': 0.7,  # 盘中溢价权重降低
-    },
-    'choppy_market': {            # 震荡市场
-        'momentum': 0.6,          # 动量权重降低（假信号多）
-        'fund_flow': 1.2,         # 资金流权重提升
-        'flow_acceleration': 1.2, # 加速度权重提升
-        'valuation': 1.3,         # 估值权重提升
-    },
+    'transitional': {      # 过渡市
+        'net_inflow': 0.35,
+        'flow_acceleration': 0.15,
+        'intraday_premium': 0.10,
+        'premium': 0.20,
+        'momentum': 0.20,
+    }
 }
 ```
 
@@ -1251,26 +1303,25 @@ class BacktestEngine:
 | 回测引擎 | ✅ | 完整回测框架 |
 | 风险控制 | ✅ | 多层止损止盈体系 |
 
-### Phase 2: v2.1 优化迭代（当前）
+### Phase 2: v2.1/v2.2 优化迭代（已完成）
 
-| 任务 | 预计工作量 | 优先级 |
-|------|-----------|--------|
-| **风格判断模块** | 2天 | P0 |
-| - 大盘/小盘收益差计算 | | |
-| - 资金流比分析 | | |
-| - 风格切换缓冲机制 | | |
-| **动态因子权重** | 1天 | P0 |
-| - 市场环境识别 | | |
-| - 权重调整算法 | | |
-| - 与评分系统集成 | | |
-| **趋势择时模型** | 2天 | P0 |
-| - 均线系统排列 | | |
-| - 趋势强度评分 | | |
-| - 动态仓位管理 | | |
-| **回测验证** | 2天 | P1 |
-| - 参数敏感性测试 | | |
-| - 2022-2025全周期回测 | | |
-| - 对比基准分析 | | |
+| 任务 | 状态 | 说明 |
+|------|------|------|
+| **风格判断模块** | ✅ | 大盘/小盘风格检测，带切换缓冲 |
+| - 大盘/小盘收益差计算 | ✅ | 20日收益差判断风格 |
+| - 资金流比分析 | ✅ | 沪深300/中证1000资金流比 |
+| - 风格切换缓冲机制 | ✅ | 连续3次确认+最少持有10天 |
+| **动态因子权重** | ✅ | 根据市场风格动态调整权重 |
+| - 市场环境识别 | ✅ | trending/choppy/transitional |
+| - 权重调整算法 | ✅ | 大盘:动量↑ 小盘:资金流↑ |
+| - 与评分系统集成 | ✅ | SignalGenerator集成完成 |
+| **趋势择时模型** | ✅ | 多维度趋势评估 |
+| - 均线系统排列 | ✅ | 5/10/20/60日均线得分 |
+| - 趋势强度评分 | ✅ | 0-100分综合评分 |
+| - MACD趋势确认 | ✅ | v2.2新增，权重10% |
+| - 动态仓位管理 | ✅ | 根据趋势调整仓位 |
+| **数据优化** | ✅ | 净值数据获取+3次重试机制 |
+| **回测验证** | ✅ | 2022-2025全周期回测完成 |
 
 ### Phase 3: 高级优化（可选）
 
